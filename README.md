@@ -373,7 +373,7 @@ Useful environment overrides for these endpoints:
 
 - `JCODE_STREAM_IDLE_TIMEOUT_SECS` — raise the streaming idle timeout (default 180s) for slow reasoning models that think silently before emitting tokens. Also settable as `[provider] stream_idle_timeout_secs` in `config.toml`.
 - Per-model `context_window` (alias `context_limit`) in a `[[providers.<name>.models]]` entry — set the context window when the endpoint has no usable `/v1/models` response, so jcode does not fall back to the generic 200k default.
-- `api = "responses"` in a named profile — use the Responses API request/tool format and its native reasoning-effort vocabulary, including `max`. Omit it, or set `api = "chat-completions"`, to retain the default Chat Completions behavior.
+- `api = "responses"` in a named profile — use the Responses API request/tool format and its compatible reasoning-effort ladder, including genuine `max`. Omit it, or set `api = "chat-completions"`, to retain the default Chat Completions behavior.
 - `extra_body` — inject non-standard top-level fields into every completion request body for backends that require them. See [Extra request-body fields](#extra-request-body-fields-extra_body) below.
 
 For details on self-hosting, local runtimes, and the exact config file shape, see below.

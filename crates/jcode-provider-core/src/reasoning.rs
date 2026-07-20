@@ -34,9 +34,9 @@ pub const OPENROUTER_SELECTABLE_EFFORTS: &[&str] = &[
 
 /// Portable effort levels for direct OpenAI-compatible GPT endpoints.
 ///
-/// Azure OpenAI deployments reject both `minimal` and `max`, while native
-/// OpenAI and OpenRouter expose broader vocabularies. Keep the compatible
-/// picker to the intersection verified across these gateways. A runtime may
+/// Azure OpenAI Chat Completions rejects both `minimal` and `max`, while native
+/// OpenAI, compatible Responses, and OpenRouter expose broader vocabularies.
+/// Keep the compatible Chat picker to the verified intersection. A runtime may
 /// still pass through an explicitly configured provider-specific value.
 pub const OPENAI_COMPATIBLE_SELECTABLE_EFFORTS: &[&str] = &[
     "none",
@@ -44,6 +44,22 @@ pub const OPENAI_COMPATIBLE_SELECTABLE_EFFORTS: &[&str] = &[
     "medium",
     "high",
     "xhigh",
+    "swarm",
+    "swarm-deep",
+];
+
+/// Portable effort levels for OpenAI-compatible Responses API endpoints.
+///
+/// Azure Responses accepts literal `max` for current GPT-5 reasoning models but
+/// rejects `minimal`, so this differs from both native OpenAI and compatible
+/// Chat Completions. Explicit provider-specific values can still be requested.
+pub const OPENAI_COMPATIBLE_RESPONSES_SELECTABLE_EFFORTS: &[&str] = &[
+    "none",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
     "swarm",
     "swarm-deep",
 ];
@@ -89,7 +105,7 @@ pub fn inferred_reasoning_efforts(
         || model.starts_with("o5");
 
     if provider.contains("responses") && is_openai_model {
-        return OPENAI_SELECTABLE_EFFORTS.to_vec();
+        return OPENAI_COMPATIBLE_RESPONSES_SELECTABLE_EFFORTS.to_vec();
     }
 
     if provider.contains("openrouter") {
@@ -165,9 +181,11 @@ mod tests {
                 Some("openai-compatible:custom responses api"),
                 Some("gpt-5.6")
             ),
-            OPENAI_SELECTABLE_EFFORTS,
-            "Responses-compatible runtimes should advertise native OpenAI efforts"
+            OPENAI_COMPATIBLE_RESPONSES_SELECTABLE_EFFORTS,
+            "Responses-compatible runtimes should advertise the portable Responses efforts"
         );
+        assert!(!OPENAI_COMPATIBLE_RESPONSES_SELECTABLE_EFFORTS.contains(&"minimal"));
+        assert!(OPENAI_COMPATIBLE_RESPONSES_SELECTABLE_EFFORTS.contains(&"max"));
     }
 
     #[test]

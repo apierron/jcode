@@ -1779,7 +1779,7 @@ fn test_model_picker_effort_variants_follow_each_route_vocabulary() {
             "openai-compatible:azure-credit",
             "minimal"
         ),
-        "compatible routes must not advertise minimal because Azure GPT rejects it"
+        "compatible Chat routes must not advertise minimal because Azure GPT rejects it"
     );
     assert!(
         !has_route_effort(
@@ -1787,9 +1787,9 @@ fn test_model_picker_effort_variants_follow_each_route_vocabulary() {
             "openai-compatible:azure-credit",
             "max"
         ),
-        "compatible routes must not advertise max because it is rejected by Azure GPT gateways"
+        "compatible Chat routes must not advertise max because Azure Chat Completions rejects it"
     );
-    assert!(has_route_effort(
+    assert!(!has_route_effort(
         "gpt-5.6-terra",
         "openai-compatible:azure-responses",
         "minimal"

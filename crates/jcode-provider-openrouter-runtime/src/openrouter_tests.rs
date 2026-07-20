@@ -1603,7 +1603,7 @@ fn named_responses_profile_uses_responses_wire_shape_and_native_max() {
         .expect("Responses provider");
     assert_eq!(
         provider.available_efforts(),
-        jcode_provider_core::OPENAI_SELECTABLE_EFFORTS
+        jcode_provider_core::OPENAI_COMPATIBLE_RESPONSES_SELECTABLE_EFFORTS
     );
     assert_eq!(
         provider.runtime_display_name(),

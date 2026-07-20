@@ -560,7 +560,7 @@ impl Provider for OpenRouterProvider {
             jcode_provider_core::DEEPSEEK_SELECTABLE_EFFORTS.to_vec()
         } else if self.supports_openai_reasoning_effort() {
             if self.wire_api == jcode_base::config::NamedProviderApi::Responses {
-                jcode_provider_core::OPENAI_SELECTABLE_EFFORTS.to_vec()
+                jcode_provider_core::OPENAI_COMPATIBLE_RESPONSES_SELECTABLE_EFFORTS.to_vec()
             } else {
                 jcode_provider_core::OPENAI_COMPATIBLE_SELECTABLE_EFFORTS.to_vec()
             }
