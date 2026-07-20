@@ -82,7 +82,11 @@ pub fn inferred_reasoning_efforts(
         || model.starts_with("o5");
     if provider.contains("openai-compatible") {
         return if is_openai_model {
-            OPENAI_SELECTABLE_EFFORTS.to_vec()
+            // `max` is native-OpenAI-specific: Azure and other compatible GPT
+            // gateways commonly top out at `xhigh`. Keep the inferred picker
+            // ladder to the portable subset; runtimes may still accept an
+            // explicitly configured `max` when their endpoint supports it.
+            OPENROUTER_SELECTABLE_EFFORTS.to_vec()
         } else {
             Vec::new()
         };
@@ -120,7 +124,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn provider_ladders_preserve_distinct_max_semantics() {
+    fn provider_ladders_preserve_native_max_and_portable_compatible_semantics() {
         assert_eq!(
             inferred_reasoning_efforts(Some("openai"), Some("gpt-5.4")),
             OPENAI_SELECTABLE_EFFORTS
@@ -132,8 +136,8 @@ mod tests {
         assert!(DEEPSEEK_SELECTABLE_EFFORTS.contains(&"max"));
         assert_eq!(
             inferred_reasoning_efforts(Some("openai-compatible:custom"), Some("gpt-5.6")),
-            OPENAI_SELECTABLE_EFFORTS,
-            "direct OpenAI-compatible runtimes use the OpenAI reasoning_effort vocabulary"
+            OPENROUTER_SELECTABLE_EFFORTS,
+            "compatible runtimes should not advertise nonportable max"
         );
     }
 

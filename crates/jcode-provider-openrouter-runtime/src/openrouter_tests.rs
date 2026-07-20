@@ -1531,7 +1531,17 @@ fn direct_openai_compatible_chat_request_serializes_reasoning_effort_vocabulary(
         .build()
         .expect("runtime");
 
-    for effort in ["none", "minimal", "low", "medium", "high", "xhigh", "max"] {
+    for (effort, wire_effort) in [
+        ("none", None),
+        ("minimal", Some("minimal")),
+        ("low", Some("low")),
+        ("medium", Some("medium")),
+        ("high", Some("high")),
+        ("xhigh", Some("xhigh")),
+        ("max", Some("max")),
+        ("swarm", Some("xhigh")),
+        ("swarm-deep", Some("xhigh")),
+    ] {
         let (api_base, request_rx) = spawn_single_response_chat_server();
         let provider = OpenRouterProvider {
             api_base,
@@ -1558,15 +1568,15 @@ fn direct_openai_compatible_chat_request_serializes_reasoning_effort_vocabulary(
         let request = request_rx
             .recv_timeout(Duration::from_secs(2))
             .expect("capture fake provider request");
-        if effort == "none" {
+        if let Some(wire_effort) = wire_effort {
             assert!(
-                !request.contains("reasoning_effort"),
-                "none must omit reasoning_effort: {request}"
+                request.contains(&format!(r#""reasoning_effort":"{wire_effort}""#)),
+                "direct compatible request must map {effort} to {wire_effort}: {request}"
             );
         } else {
             assert!(
-                request.contains(&format!(r#""reasoning_effort":"{effort}""#)),
-                "direct compatible request must preserve {effort}: {request}"
+                !request.contains("reasoning_effort"),
+                "none must omit reasoning_effort: {request}"
             );
         }
         assert!(
@@ -2789,17 +2799,16 @@ fn compat_profile_serving_gpt_family_model_supports_reasoning_effort() {
                 "medium",
                 "high",
                 "xhigh",
-                "max",
                 "swarm",
                 "swarm-deep"
             ],
-            "{model} should expose OpenAI effort vocabulary"
+            "{model} should expose the portable compatible effort vocabulary"
         );
         provider
             .set_reasoning_effort("high")
             .unwrap_or_else(|e| panic!("{model} on compat endpoint accepts effort: {e}"));
         assert_eq!(provider.reasoning_effort(), Some("high".to_string()));
-        // A direct compatible endpoint receives OpenAI's real max value.
+        // Endpoints that support native max can still receive it explicitly.
         provider.set_reasoning_effort("max").unwrap();
         assert_eq!(provider.reasoning_effort(), Some("max".to_string()));
     }
@@ -2872,32 +2881,31 @@ fn named_profile_supports_reasoning_effort_config_override() {
 fn named_profile_construction_reads_openai_reasoning_effort_config() {
     let _lock = ENV_LOCK.lock();
     let _namespace = EnvVarGuard::remove("JCODE_OPENROUTER_CACHE_NAMESPACE");
+    let effort = EnvVarGuard::set("JCODE_OPENAI_REASONING_EFFORT", "xhigh");
+    jcode_base::config::invalidate_config_cache();
 
     let config = jcode_base::config::NamedProviderConfig {
         base_url: "https://compat.example.test/v1".to_string(),
         api_key: Some("test".to_string()),
-        default_model: Some("deepseek-v4".to_string()),
+        default_model: Some("gpt-5.6-sol".to_string()),
         supports_reasoning_effort: Some(true),
         ..Default::default()
     };
 
     let provider =
         OpenRouterProvider::new_named_openai_compatible("custom", &config).expect("provider");
-    // The config default is only applied when openai_reasoning_effort is set;
-    // with no config value the provider starts with no effort but still
-    // supports setting one.
-    let initial = provider.reasoning_effort();
-    let configured = jcode_base::config::config()
-        .provider
-        .openai_reasoning_effort
-        .clone();
-    match configured {
-        Some(_) => assert!(initial.is_some(), "configured effort must be honored"),
-        None => assert_eq!(initial, None),
-    }
-    provider
-        .set_reasoning_effort("max")
-        .expect("explicitly-enabled profile accepts effort");
+    assert_eq!(provider.reasoning_effort().as_deref(), Some("xhigh"));
+    assert_eq!(
+        provider.available_efforts(),
+        jcode_provider_core::OPENROUTER_SELECTABLE_EFFORTS,
+        "compatible GPT profiles must use the portable GPT vocabulary"
+    );
+    provider.set_reasoning_effort("max").expect(
+        "an explicitly configured max remains available for compatible endpoints that support it",
+    );
+
+    drop(effort);
+    jcode_base::config::invalidate_config_cache();
 }
 
 /// Regression: when the shared interactive server boots an `OpenRouterProvider`

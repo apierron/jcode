@@ -993,13 +993,22 @@ impl OpenRouterProvider {
         model.trim().to_ascii_lowercase().contains("deepseek")
     }
 
-    /// Does this runtime accept the DeepSeek-style `reasoning_effort` field?
-    /// Priority: explicit named-profile config override, then the dedicated
-    /// deepseek profile, then the active model family for direct compat
-    /// endpoints (never for real OpenRouter, which uses unified reasoning).
+    /// Does this runtime use the DeepSeek `reasoning_effort` vocabulary?
+    /// GPT model-family semantics take priority over a generic profile-level
+    /// enable switch; otherwise explicit config, the dedicated profile, and
+    /// DeepSeek model ids enable it. Real OpenRouter uses unified reasoning.
     pub(crate) fn supports_deepseek_reasoning_effort(&self) -> bool {
-        if let Some(explicit) = self.reasoning_effort_support {
-            return explicit;
+        if self.reasoning_effort_support == Some(false) {
+            return false;
+        }
+        // A generic `supports_reasoning_effort = true` must not force GPT
+        // models onto DeepSeek's smaller vocabulary. Model-family semantics
+        // are more specific than the provider-level enable switch.
+        if Self::model_is_openai_reasoning_family(&self.model_snapshot()) {
+            return false;
+        }
+        if self.reasoning_effort_support == Some(true) {
+            return true;
         }
         if Self::profile_supports_reasoning_effort(self.profile_id.as_deref()) {
             return true;
@@ -1070,17 +1079,30 @@ impl OpenRouterProvider {
     fn initial_reasoning_effort(
         reasoning_effort_support: Option<bool>,
         profile_id: Option<&str>,
+        model: &str,
+        send_openrouter_headers: bool,
     ) -> Option<String> {
-        let supported =
-            reasoning_effort_support.unwrap_or(Self::profile_supports_reasoning_effort(profile_id));
-        if !supported {
+        if reasoning_effort_support == Some(false) {
             return None;
         }
-        jcode_base::config::config()
+        let configured = jcode_base::config::config()
             .provider
             .openai_reasoning_effort
             .as_deref()
-            .and_then(Self::normalize_reasoning_effort)
+            .map(str::to_string)?;
+
+        if Self::profile_supports_unified_reasoning(profile_id, send_openrouter_headers) {
+            Self::normalize_unified_reasoning_effort(&configured)
+        } else if Self::model_is_openai_reasoning_family(model) {
+            Self::normalize_openai_reasoning_effort(&configured)
+        } else if reasoning_effort_support == Some(true)
+            || Self::profile_supports_reasoning_effort(profile_id)
+            || Self::model_is_deepseek_family(model)
+        {
+            Self::normalize_reasoning_effort(&configured)
+        } else {
+            None
+        }
     }
 
     fn profile_rejects_image_input(profile_id: Option<&str>) -> bool {
@@ -1410,13 +1432,16 @@ impl OpenRouterProvider {
                 Some((id.to_ascii_lowercase(), supports_images))
             })
             .collect::<HashMap<_, _>>();
+        let initial_reasoning_effort = Self::initial_reasoning_effort(
+            profile.supports_reasoning_effort,
+            Some(profile_name),
+            &model,
+            false,
+        );
         Ok(Self {
             client: jcode_provider_core::shared_http_client(),
             model: Arc::new(RwLock::new(model)),
-            reasoning_effort: Arc::new(RwLock::new(Self::initial_reasoning_effort(
-                profile.supports_reasoning_effort,
-                Some(profile_name),
-            ))),
+            reasoning_effort: Arc::new(RwLock::new(initial_reasoning_effort)),
             api_base,
             auth,
             supports_provider_features: matches!(
@@ -1618,14 +1643,17 @@ impl OpenRouterProvider {
         };
         let max_tokens = Self::configured_max_tokens(profile_id.as_deref());
         let extra_body = Self::resolve_extra_body(None, &configured_env_file_name());
+        let initial_reasoning_effort = Self::initial_reasoning_effort(
+            None,
+            profile_id.as_deref(),
+            &model,
+            send_openrouter_headers,
+        );
 
         Ok(Self {
             client: jcode_provider_core::shared_http_client(),
             model: Arc::new(RwLock::new(model)),
-            reasoning_effort: Arc::new(RwLock::new(Self::initial_reasoning_effort(
-                None,
-                profile_id.as_deref(),
-            ))),
+            reasoning_effort: Arc::new(RwLock::new(initial_reasoning_effort)),
             api_base,
             auth,
             supports_provider_features,
@@ -1728,14 +1756,13 @@ impl OpenRouterProvider {
             .default_model
             .clone()
             .unwrap_or_else(|| DEFAULT_MODEL.to_string());
+        let initial_reasoning_effort =
+            Self::initial_reasoning_effort(None, Some(&resolved.id), &model, false);
 
         Ok(Self {
             client: jcode_provider_core::shared_http_client(),
             model: Arc::new(RwLock::new(model)),
-            reasoning_effort: Arc::new(RwLock::new(Self::initial_reasoning_effort(
-                None,
-                Some(&resolved.id),
-            ))),
+            reasoning_effort: Arc::new(RwLock::new(initial_reasoning_effort)),
             api_base,
             auth,
             supports_provider_features: false,

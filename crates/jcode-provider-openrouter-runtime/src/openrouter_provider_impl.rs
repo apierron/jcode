@@ -142,7 +142,10 @@ impl Provider for OpenRouterProvider {
                 // Zen serving gpt-5.3-codex-spark) take the standard OpenAI
                 // `reasoning_effort` field with OpenAI's effort vocabulary.
                 let effort = if jcode_base::prompt::is_swarm_effort(effort) {
-                    "max"
+                    // `max` is not portable across compatible GPT gateways
+                    // (Azure tops out at `xhigh`). Explicit max remains intact
+                    // for endpoints that support it.
+                    "xhigh"
                 } else {
                     effort
                 };
@@ -448,10 +451,7 @@ impl Provider for OpenRouterProvider {
         }
         let requested = effort.trim().to_ascii_lowercase();
         let mut accepted = self.available_efforts().contains(&requested.as_str());
-        if !self.supports_deepseek_reasoning_effort()
-            && !self.supports_openai_reasoning_effort()
-            && requested == "max"
-        {
+        if !self.supports_deepseek_reasoning_effort() && requested == "max" {
             accepted = true;
         }
         if !requested.is_empty() && !accepted {
@@ -473,7 +473,7 @@ impl Provider for OpenRouterProvider {
         if self.supports_deepseek_reasoning_effort() {
             jcode_provider_core::DEEPSEEK_SELECTABLE_EFFORTS.to_vec()
         } else if self.supports_openai_reasoning_effort() {
-            jcode_provider_core::OPENAI_SELECTABLE_EFFORTS.to_vec()
+            jcode_provider_core::OPENROUTER_SELECTABLE_EFFORTS.to_vec()
         } else if Self::profile_supports_unified_reasoning(
             self.profile_id.as_deref(),
             self.send_openrouter_headers,

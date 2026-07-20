@@ -455,11 +455,10 @@ pub struct NamedProviderConfig {
     /// Must be a JSON object; keys here override jcode-generated body fields.
     #[serde(default, alias = "extra-body", skip_serializing_if = "Option::is_none")]
     pub extra_body: Option<serde_json::Value>,
-    /// Whether this endpoint accepts the DeepSeek-style top-level
-    /// `reasoning_effort` request field (`/effort` support). When unset, jcode
-    /// auto-detects it from the active model id (DeepSeek-family models
-    /// support it regardless of which gateway serves them). Set `false` to
-    /// suppress auto-detection for strict-schema endpoints.
+    /// Whether this endpoint accepts the top-level `reasoning_effort` request
+    /// field (`/effort` support). When unset, jcode auto-detects it from GPT and
+    /// DeepSeek model ids. Set `false` to suppress auto-detection for
+    /// strict-schema endpoints.
     #[serde(
         default,
         alias = "supports-reasoning-effort",
