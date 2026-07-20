@@ -1538,7 +1538,7 @@ fn direct_openai_compatible_chat_request_serializes_reasoning_effort_vocabulary(
         ("medium", Some("medium")),
         ("high", Some("high")),
         ("xhigh", Some("xhigh")),
-        ("max", Some("xhigh")),
+        ("max", Some("max")),
         ("swarm", Some("xhigh")),
         ("swarm-deep", Some("xhigh")),
     ] {
@@ -2798,7 +2798,6 @@ fn compat_profile_serving_gpt_family_model_supports_reasoning_effort() {
                 "medium",
                 "high",
                 "xhigh",
-                "max",
                 "swarm",
                 "swarm-deep"
             ],
@@ -2808,7 +2807,7 @@ fn compat_profile_serving_gpt_family_model_supports_reasoning_effort() {
             .set_reasoning_effort("high")
             .unwrap_or_else(|e| panic!("{model} on compat endpoint accepts effort: {e}"));
         assert_eq!(provider.reasoning_effort(), Some("high".to_string()));
-        // Compatible max remains visible in Jcode and maps to xhigh at request time.
+        // Endpoints that support native max can still receive it explicitly.
         provider.set_reasoning_effort("max").unwrap();
         assert_eq!(provider.reasoning_effort(), Some("max".to_string()));
         provider.set_reasoning_effort("minimal").unwrap();
@@ -2883,7 +2882,7 @@ fn named_profile_supports_reasoning_effort_config_override() {
 fn named_profile_construction_reads_openai_reasoning_effort_config() {
     let _lock = ENV_LOCK.lock();
     let _namespace = EnvVarGuard::remove("JCODE_OPENROUTER_CACHE_NAMESPACE");
-    let effort = EnvVarGuard::set("JCODE_OPENAI_REASONING_EFFORT", "max");
+    let effort = EnvVarGuard::set("JCODE_OPENAI_REASONING_EFFORT", "xhigh");
     jcode_base::config::invalidate_config_cache();
 
     let config = jcode_base::config::NamedProviderConfig {
@@ -2896,17 +2895,14 @@ fn named_profile_construction_reads_openai_reasoning_effort_config() {
 
     let provider =
         OpenRouterProvider::new_named_openai_compatible("custom", &config).expect("provider");
-    assert_eq!(provider.reasoning_effort().as_deref(), Some("max"));
+    assert_eq!(provider.reasoning_effort().as_deref(), Some("xhigh"));
     assert_eq!(
         provider.available_efforts(),
         jcode_provider_core::OPENAI_COMPATIBLE_SELECTABLE_EFFORTS,
         "compatible GPT profiles must use the portable GPT vocabulary"
     );
-    provider.set_model("gpt-5.6-terra").expect("switch model");
-    assert_eq!(
-        provider.reasoning_effort().as_deref(),
-        Some("max"),
-        "model selection must not silently clear the compatible max alias"
+    provider.set_reasoning_effort("max").expect(
+        "an explicitly configured max remains available for compatible endpoints that support it",
     );
 
     drop(effort);

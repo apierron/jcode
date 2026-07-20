@@ -141,10 +141,10 @@ impl Provider for OpenRouterProvider {
                 // GPT-family models on direct compat gateways (e.g. OpenCode
                 // Zen serving gpt-5.3-codex-spark) take the standard OpenAI
                 // `reasoning_effort` field with OpenAI's effort vocabulary.
-                let effort = if jcode_base::prompt::is_swarm_effort(effort) || effort == "max" {
-                    // `max` is a Jcode control, but not a portable literal wire
-                    // value. Azure reports `xhigh` as its strongest supported
-                    // effort, so direct compatible GPT routes use that value.
+                let effort = if jcode_base::prompt::is_swarm_effort(effort) {
+                    // `max` is not portable across compatible GPT gateways
+                    // (Azure tops out at `xhigh`). Explicit max remains intact
+                    // for endpoints that support it.
                     "xhigh"
                 } else {
                     effort
@@ -451,7 +451,9 @@ impl Provider for OpenRouterProvider {
         }
         let requested = effort.trim().to_ascii_lowercase();
         let mut accepted = self.available_efforts().contains(&requested.as_str());
-        if self.supports_openai_reasoning_effort() && requested == "minimal" {
+        if self.supports_openai_reasoning_effort()
+            && matches!(requested.as_str(), "minimal" | "max")
+        {
             // Direct compatible pickers expose only the portable Azure-safe
             // subset, but endpoints with a broader vocabulary can still opt in
             // through config or an explicit command.
