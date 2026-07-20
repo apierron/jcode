@@ -1560,6 +1560,10 @@ fn direct_openai_compatible_chat_request_preserves_max_reasoning_effort() {
         request.contains(r#""reasoning_effort":"max""#),
         "direct compatible request must preserve OpenAI max: {request}"
     );
+    assert!(
+        request.contains(r#""stream_options":{"include_usage":true}"#),
+        "direct compatible request must request streaming usage: {request}"
+    );
 }
 
 #[test]

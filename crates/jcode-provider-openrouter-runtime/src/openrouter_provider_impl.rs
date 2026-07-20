@@ -117,6 +117,7 @@ impl Provider for OpenRouterProvider {
             "model": model,
             "messages": api_messages,
             "stream": true,
+            "stream_options": { "include_usage": true },
         });
 
         if let Some(max_tokens) = self.max_tokens {
