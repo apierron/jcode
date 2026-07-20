@@ -87,9 +87,9 @@ fn route_supports_reasoning_effort(api_method: &str) -> bool {
         | Method::AnthropicApiKey
         | Method::OpenAIOAuth
         | Method::OpenAIApiKey
-        | Method::OpenRouter => true,
+        | Method::OpenRouter
+        | Method::OpenAiCompatible { .. } => true,
         Method::JcodeSubscription
-        | Method::OpenAiCompatible { .. }
         | Method::Copilot
         | Method::Cursor
         | Method::Bedrock
@@ -3862,11 +3862,16 @@ mod tests {
         assert!(route_supports_reasoning_effort("openai-oauth"));
         assert!(route_supports_reasoning_effort("openai-api-key"));
         assert!(route_supports_reasoning_effort("openrouter"));
+        assert!(route_supports_reasoning_effort(
+            "openai-compatible:custom-gateway"
+        ));
 
         assert!(!route_supports_reasoning_effort("copilot"));
         assert!(!route_supports_reasoning_effort("bedrock"));
         assert!(!route_supports_reasoning_effort("https"));
-        assert!(!route_supports_reasoning_effort(
+        // Compatible runtimes support effort conditionally. Model inference
+        // still suppresses effort rows for non-reasoning models.
+        assert!(route_supports_reasoning_effort(
             "openai-compatible:llamacpp"
         ));
         assert!(!route_supports_reasoning_effort("remote-catalog"));
