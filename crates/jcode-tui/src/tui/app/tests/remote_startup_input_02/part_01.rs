@@ -1716,15 +1716,25 @@ fn test_model_picker_effort_variants_follow_each_route_vocabulary() {
         detail: String::new(),
         cheapness: None,
     });
+    for model in ["gpt-5.6-sol", "qwen3-coder"] {
+        app.remote_model_options.push(crate::provider::ModelRoute {
+            model: model.to_string(),
+            provider: "Azure Credit".to_string(),
+            api_method: "openai-compatible:azure-credit".to_string(),
+            available: true,
+            detail: String::new(),
+            cheapness: None,
+        });
+    }
 
     app.open_model_picker();
     let picker = app
         .inline_interactive_state
         .as_ref()
         .expect("model picker should be open");
-    let has_route_effort = |api_method: &str, effort: &str| {
+    let has_route_effort = |model: &str, api_method: &str, effort: &str| {
         picker.entries.iter().any(|entry| {
-            entry.name.starts_with("gpt-5.5 (")
+            entry.name.starts_with(&format!("{model} ("))
                 && entry.effort.as_deref() == Some(effort)
                 && entry
                     .options
@@ -1733,14 +1743,41 @@ fn test_model_picker_effort_variants_follow_each_route_vocabulary() {
         })
     };
 
-    assert!(has_route_effort("openai-oauth", "max"));
-    assert!(has_route_effort("openai-oauth", "minimal"));
-    assert!(has_route_effort("openrouter", "xhigh"));
-    assert!(has_route_effort("openrouter", "minimal"));
+    assert!(has_route_effort("gpt-5.5", "openai-oauth", "max"));
+    assert!(has_route_effort(
+        "gpt-5.5",
+        "openai-oauth",
+        "minimal"
+    ));
+    assert!(has_route_effort("gpt-5.5", "openrouter", "xhigh"));
+    assert!(has_route_effort("gpt-5.5", "openrouter", "minimal"));
     assert!(
-        !has_route_effort("openrouter", "max"),
+        !has_route_effort("gpt-5.5", "openrouter", "max"),
         "OpenRouter must not advertise max as a distinct rung because it aliases xhigh"
     );
+    assert!(has_route_effort(
+        "gpt-5.6-sol",
+        "openai-compatible:azure-credit",
+        "minimal"
+    ));
+    assert!(has_route_effort(
+        "gpt-5.6-sol",
+        "openai-compatible:azure-credit",
+        "max"
+    ));
+
+    let compatible_qwen_rows: Vec<_> = picker
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.name == "qwen3-coder"
+                && entry.options.first().is_some_and(|route| {
+                    route.api_method == "openai-compatible:azure-credit"
+                })
+        })
+        .collect();
+    assert_eq!(compatible_qwen_rows.len(), 1);
+    assert_eq!(compatible_qwen_rows[0].effort, None);
 }
 
 /// Plain model rows (no effort suffix) must not stage a reasoning effort.
