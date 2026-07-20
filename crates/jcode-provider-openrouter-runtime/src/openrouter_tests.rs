@@ -1516,20 +1516,7 @@ fn direct_deepseek_chat_request_sends_reasoning_effort() {
 }
 
 #[test]
-fn direct_openai_compatible_chat_request_preserves_max_reasoning_effort() {
-    let (api_base, request_rx) = spawn_single_response_chat_server();
-    let provider = OpenRouterProvider {
-        api_base,
-        model: Arc::new(RwLock::new("gpt-5.5".to_string())),
-        supports_provider_features: false,
-        supports_model_catalog: false,
-        send_openrouter_headers: false,
-        ..make_custom_compatible_provider()
-    };
-    provider
-        .set_reasoning_effort("max")
-        .expect("direct OpenAI-compatible profile should accept max effort");
-
+fn direct_openai_compatible_chat_request_serializes_reasoning_effort_vocabulary() {
     let messages = vec![Message {
         role: Role::User,
         content: vec![ContentBlock::Text {
@@ -1543,27 +1530,50 @@ fn direct_openai_compatible_chat_request_preserves_max_reasoning_effort() {
         .enable_all()
         .build()
         .expect("runtime");
-    rt.block_on(async {
-        let mut stream = provider
-            .complete(&messages, &[], "", None)
-            .await
-            .expect("fake chat request should start");
-        while let Some(event) = stream.next().await {
-            event.expect("stream event should parse");
-        }
-    });
 
-    let request = request_rx
-        .recv_timeout(Duration::from_secs(2))
-        .expect("capture fake provider request");
-    assert!(
-        request.contains(r#""reasoning_effort":"max""#),
-        "direct compatible request must preserve OpenAI max: {request}"
-    );
-    assert!(
-        request.contains(r#""stream_options":{"include_usage":true}"#),
-        "direct compatible request must request streaming usage: {request}"
-    );
+    for effort in ["none", "minimal", "low", "medium", "high", "xhigh", "max"] {
+        let (api_base, request_rx) = spawn_single_response_chat_server();
+        let provider = OpenRouterProvider {
+            api_base,
+            model: Arc::new(RwLock::new("gpt-5.5".to_string())),
+            supports_provider_features: false,
+            supports_model_catalog: false,
+            send_openrouter_headers: false,
+            ..make_custom_compatible_provider()
+        };
+        provider
+            .set_reasoning_effort(effort)
+            .expect("direct OpenAI-compatible profile should accept OpenAI efforts");
+
+        rt.block_on(async {
+            let mut stream = provider
+                .complete(&messages, &[], "", None)
+                .await
+                .expect("fake chat request should start");
+            while let Some(event) = stream.next().await {
+                event.expect("stream event should parse");
+            }
+        });
+
+        let request = request_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("capture fake provider request");
+        if effort == "none" {
+            assert!(
+                !request.contains("reasoning_effort"),
+                "none must omit reasoning_effort: {request}"
+            );
+        } else {
+            assert!(
+                request.contains(&format!(r#""reasoning_effort":"{effort}""#)),
+                "direct compatible request must preserve {effort}: {request}"
+            );
+        }
+        assert!(
+            request.contains(r#""stream_options":{"include_usage":true}"#),
+            "direct compatible request must request streaming usage: {request}"
+        );
+    }
 }
 
 #[test]
