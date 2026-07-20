@@ -400,6 +400,18 @@ pub enum NamedProviderType {
     OpenRouter,
 }
 
+/// OpenAI-compatible wire protocol used by a named provider profile.
+///
+/// Profiles default to Chat Completions for backwards compatibility. Select
+/// `responses` only when the endpoint implements OpenAI's Responses API.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum NamedProviderApi {
+    #[default]
+    ChatCompletions,
+    Responses,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum NamedProviderAuth {
@@ -432,7 +444,9 @@ pub struct NamedProviderConfig {
     #[serde(rename = "type")]
     pub provider_type: NamedProviderType,
     pub base_url: String,
-    pub api: Option<String>,
+    /// Wire protocol for completions. Omitted means `chat-completions`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api: Option<NamedProviderApi>,
     pub auth: NamedProviderAuth,
     pub auth_header: Option<String>,
     pub api_key_env: Option<String>,
@@ -448,8 +462,8 @@ pub struct NamedProviderConfig {
     pub allow_provider_pinning: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub models: Vec<NamedProviderModelConfig>,
-    /// Extra top-level JSON fields merged into every chat/completions request
-    /// body sent to this provider. Lets users inject non-standard parameters
+    /// Extra top-level JSON fields merged into every completion request body
+    /// sent to this provider. Lets users inject non-standard parameters
     /// some OpenAI-compatible backends require (e.g. NVIDIA NIM DeepSeek-V4
     /// needs `chat_template_kwargs = { thinking = true, reasoning_effort = "high" }`).
     /// Must be a JSON object; keys here override jcode-generated body fields.

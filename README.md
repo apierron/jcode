@@ -350,7 +350,7 @@ If you prefer to configure things by editing files instead of using the login UI
 
 #### OpenAI-compatible providers
 
-Many hosted services speak the standard OpenAI `/v1/chat/completions` API. jcode talks to them through one shared OpenAI-compatible provider, so you can use almost any such endpoint without waiting for a dedicated integration.
+Many hosted services speak an OpenAI-compatible API. jcode defaults to `/v1/chat/completions` and can also use `/v1/responses` when a named profile explicitly selects it, so you can use almost any such endpoint without waiting for a dedicated integration.
 
 There are two ways to set one up:
 
@@ -373,7 +373,8 @@ Useful environment overrides for these endpoints:
 
 - `JCODE_STREAM_IDLE_TIMEOUT_SECS` — raise the streaming idle timeout (default 180s) for slow reasoning models that think silently before emitting tokens. Also settable as `[provider] stream_idle_timeout_secs` in `config.toml`.
 - Per-model `context_window` (alias `context_limit`) in a `[[providers.<name>.models]]` entry — set the context window when the endpoint has no usable `/v1/models` response, so jcode does not fall back to the generic 200k default.
-- `extra_body` — inject non-standard top-level fields into every chat/completions request body for backends that require them. See [Extra request-body fields](#extra-request-body-fields-extra_body) below.
+- `api = "responses"` in a named profile — use the Responses API request/tool format and its native reasoning-effort vocabulary, including `max`. Omit it, or set `api = "chat-completions"`, to retain the default Chat Completions behavior.
+- `extra_body` — inject non-standard top-level fields into every completion request body for backends that require them. See [Extra request-body fields](#extra-request-body-fields-extra_body) below.
 
 For details on self-hosting, local runtimes, and the exact config file shape, see below.
 
@@ -449,6 +450,8 @@ default_model = "my-model-id"
 id = "my-model-id"
 context_window = 128000
 ```
+
+Profiles default to `api = "chat-completions"`. If the endpoint implements OpenAI's Responses API, add `api = "responses"` under `[providers.my-api]`. This keeps the same profile and model routing while switching the wire endpoint, request schema, streaming parser, and effort ladder.
 
 ##### Extra request-body fields (`extra_body`)
 

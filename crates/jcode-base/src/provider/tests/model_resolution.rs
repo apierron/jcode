@@ -968,6 +968,7 @@ default_model = "vendor/my-model"
 
 [providers.my-gateway]
 type = "openai-compatible"
+api = "responses"
 base_url = "https://example.com/proxy/openai"
 auth = "none"
 default_model = "vendor/my-model"
@@ -1016,6 +1017,7 @@ input = ["image"]
             });
         assert_eq!(route.provider, "my-gateway");
         assert_eq!(route.api_method, "openai-compatible:my-gateway");
+        assert!(route.detail.starts_with("Responses API · "));
         assert!(route.available);
         assert!(
             !routes

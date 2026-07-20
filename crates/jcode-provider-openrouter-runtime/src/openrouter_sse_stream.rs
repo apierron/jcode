@@ -1,5 +1,8 @@
 use super::*;
+use futures::Stream;
+use jcode_provider_openai::stream::OpenAIResponsesStream;
 use jcode_provider_openrouter::stream::OpenRouterStream;
+use std::pin::Pin;
 
 fn local_endpoint_troubleshooting_hint(api_base: &str, model: &str) -> &'static str {
     let lower = api_base.to_ascii_lowercase();
@@ -36,6 +39,7 @@ pub(super) async fn run_stream_with_retries(
     tx: mpsc::Sender<Result<StreamEvent>>,
     provider_pin: Arc<Mutex<Option<ProviderPin>>>,
     model: String,
+    wire_api: jcode_base::config::NamedProviderApi,
 ) {
     let mut last_error = None;
     let mut next_retry_delay = None;
@@ -91,6 +95,7 @@ pub(super) async fn run_stream_with_retries(
             attempt_tx,
             Arc::clone(&provider_pin),
             model.clone(),
+            wire_api,
         )
         .await
         {
@@ -159,6 +164,7 @@ async fn stream_response(
     tx: mpsc::Sender<Result<StreamEvent>>,
     provider_pin: Arc<Mutex<Option<ProviderPin>>>,
     model: String,
+    wire_api: jcode_base::config::NamedProviderApi,
 ) -> Result<()> {
     use jcode_message_types::ConnectionPhase;
     let _ = tx
@@ -168,7 +174,13 @@ async fn stream_response(
         .await;
     let connect_start = std::time::Instant::now();
 
-    let url = format!("{}/chat/completions", api_base);
+    let (api_path, api_label) = match wire_api {
+        jcode_base::config::NamedProviderApi::ChatCompletions => {
+            ("chat/completions", "chat completions")
+        }
+        jcode_base::config::NamedProviderApi::Responses => ("responses", "responses"),
+    };
+    let url = format!("{}/{}", api_base, api_path);
     let mut req = apply_kimi_coding_agent_headers(
         auth.apply(
             client
@@ -194,7 +206,8 @@ async fn stream_response(
         .with_context(|| {
             let hint = local_endpoint_troubleshooting_hint(&api_base, &model);
             format!(
-                "Failed to send OpenAI-compatible chat request\n  endpoint: {}\n  model: {}\n  auth: {}\n{}",
+                "Failed to send OpenAI-compatible {} request\n  endpoint: {}\n  model: {}\n  auth: {}\n{}",
+                api_label,
                 url,
                 model,
                 auth.label(),
@@ -216,7 +229,8 @@ async fn stream_response(
         let hint = local_endpoint_troubleshooting_hint(&api_base, &model);
         return Err(jcode_provider_core::retry_after::error_with_retry_after(
             format!(
-                "OpenAI-compatible chat request failed\n  endpoint: {}\n  model: {}\n  auth: {}\n  status: {}\n  response: {}\n{}",
+                "OpenAI-compatible {} request failed\n  endpoint: {}\n  model: {}\n  auth: {}\n  status: {}\n  response: {}\n{}",
+                api_label,
                 url,
                 model,
                 auth.label(),
@@ -234,7 +248,15 @@ async fn stream_response(
         }))
         .await;
 
-    let mut stream = OpenRouterStream::new(response.bytes_stream(), model.clone(), provider_pin);
+    let mut stream: Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send>> =
+        match wire_api {
+            jcode_base::config::NamedProviderApi::ChatCompletions => Box::pin(
+                OpenRouterStream::new(response.bytes_stream(), model.clone(), provider_pin),
+            ),
+            jcode_base::config::NamedProviderApi::Responses => {
+                Box::pin(OpenAIResponsesStream::new(response.bytes_stream()))
+            }
+        };
 
     // Idle timeout between streamed chunks. Configurable so slow reasoning
     // models (e.g. DeepSeek) that think silently for minutes before emitting

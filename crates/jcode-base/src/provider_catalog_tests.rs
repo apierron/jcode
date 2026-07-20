@@ -513,6 +513,7 @@ fn named_provider_config_accepts_openai_compatible_spelling() {
         r#"
         [providers.my-gateway]
         type = "openai-compatible"
+        api = "responses"
         base_url = "https://llm.example.com/v1"
         auth = "bearer"
         api_key_env = "MY_GATEWAY_API_KEY"
@@ -529,6 +530,10 @@ fn named_provider_config_accepts_openai_compatible_spelling() {
     assert_eq!(
         profile.provider_type,
         crate::config::NamedProviderType::OpenAiCompatible
+    );
+    assert_eq!(
+        profile.api,
+        Some(crate::config::NamedProviderApi::Responses)
     );
     assert_eq!(profile.base_url, "https://llm.example.com/v1");
     assert_eq!(profile.default_model.as_deref(), Some("opaque/model@id"));

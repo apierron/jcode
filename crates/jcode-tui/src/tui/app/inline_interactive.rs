@@ -1390,7 +1390,13 @@ impl App {
             let mut model_efforts = Vec::new();
             for route in entry_routes {
                 let efforts = if route_supports_reasoning_effort(&route.api_method) {
-                    inferred_reasoning_efforts(Some(&route.api_method), Some(name))
+                    let provider_identity =
+                        if route.detail.to_ascii_lowercase().contains("responses api") {
+                            format!("{} responses api", route.api_method)
+                        } else {
+                            route.api_method.clone()
+                        };
+                    inferred_reasoning_efforts(Some(&provider_identity), Some(name))
                 } else {
                     Vec::new()
                 };

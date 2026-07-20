@@ -1726,6 +1726,14 @@ fn test_model_picker_effort_variants_follow_each_route_vocabulary() {
             cheapness: None,
         });
     }
+    app.remote_model_options.push(crate::provider::ModelRoute {
+        model: "gpt-5.6-terra".to_string(),
+        provider: "Azure Responses".to_string(),
+        api_method: "openai-compatible:azure-responses".to_string(),
+        available: true,
+        detail: "Responses API · https://example.openai.azure.com/openai/v1".to_string(),
+        cheapness: None,
+    });
 
     app.open_model_picker();
     let picker = app
@@ -1781,6 +1789,16 @@ fn test_model_picker_effort_variants_follow_each_route_vocabulary() {
         ),
         "compatible routes must not advertise max because it is rejected by Azure GPT gateways"
     );
+    assert!(has_route_effort(
+        "gpt-5.6-terra",
+        "openai-compatible:azure-responses",
+        "minimal"
+    ));
+    assert!(has_route_effort(
+        "gpt-5.6-terra",
+        "openai-compatible:azure-responses",
+        "max"
+    ));
 
     let compatible_qwen_rows: Vec<_> = picker
         .entries

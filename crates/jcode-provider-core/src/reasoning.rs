@@ -82,6 +82,15 @@ pub fn inferred_reasoning_efforts(
 ) -> Vec<&'static str> {
     let provider = provider_name.unwrap_or_default().to_ascii_lowercase();
     let model = model_name.unwrap_or_default().to_ascii_lowercase();
+    let is_openai_model = model.starts_with("gpt-")
+        || model.starts_with("o1")
+        || model.starts_with("o3")
+        || model.starts_with("o4")
+        || model.starts_with("o5");
+
+    if provider.contains("responses") && is_openai_model {
+        return OPENAI_SELECTABLE_EFFORTS.to_vec();
+    }
 
     if provider.contains("openrouter") {
         return OPENROUTER_SELECTABLE_EFFORTS.to_vec();
@@ -91,11 +100,6 @@ pub fn inferred_reasoning_efforts(
         return DEEPSEEK_SELECTABLE_EFFORTS.to_vec();
     }
 
-    let is_openai_model = model.starts_with("gpt-")
-        || model.starts_with("o1")
-        || model.starts_with("o3")
-        || model.starts_with("o4")
-        || model.starts_with("o5");
     if provider.contains("openai-compatible") {
         return if is_openai_model {
             // Azure and other compatible GPT gateways commonly expose the
@@ -155,6 +159,14 @@ mod tests {
             inferred_reasoning_efforts(Some("openai-compatible:custom"), Some("gpt-5.6")),
             OPENAI_COMPATIBLE_SELECTABLE_EFFORTS,
             "compatible runtimes should advertise only the portable vocabulary"
+        );
+        assert_eq!(
+            inferred_reasoning_efforts(
+                Some("openai-compatible:custom responses api"),
+                Some("gpt-5.6")
+            ),
+            OPENAI_SELECTABLE_EFFORTS,
+            "Responses-compatible runtimes should advertise native OpenAI efforts"
         );
     }
 

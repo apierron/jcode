@@ -949,6 +949,7 @@ pub struct OpenRouterProvider {
     model: Arc<RwLock<String>>,
     reasoning_effort: Arc<RwLock<Option<String>>>,
     api_base: String,
+    wire_api: jcode_base::config::NamedProviderApi,
     auth: ProviderAuth,
     supports_provider_features: bool,
     supports_model_catalog: bool,
@@ -957,8 +958,8 @@ pub struct OpenRouterProvider {
     /// `None` means auto-detect (deepseek profile id or DeepSeek-family model).
     reasoning_effort_support: Option<bool>,
     max_tokens: Option<u32>,
-    /// Extra top-level JSON object fields merged into every chat/completions
-    /// request body (e.g. NVIDIA NIM DeepSeek-V4 `chat_template_kwargs`).
+    /// Extra top-level JSON object fields merged into every completion request
+    /// body (e.g. NVIDIA NIM DeepSeek-V4 `chat_template_kwargs`).
     /// Resolved once at construction from named-profile config or the
     /// `JCODE_OPENAI_EXTRA_BODY` env/env-file value.
     extra_body: Option<serde_json::Map<String, Value>>,
@@ -1271,10 +1272,14 @@ impl OpenRouterProvider {
 
         // Direct OpenAI-compatible profile (NVIDIA NIM, DeepSeek, Z.AI, ...).
         if let Some(profile_id) = self.profile_id.as_deref() {
-            if let Some(profile) = openai_compatible_profile_by_id(profile_id) {
-                return profile.display_name.to_string();
-            }
-            return profile_id.to_string();
+            let label = openai_compatible_profile_by_id(profile_id)
+                .map(|profile| profile.display_name.to_string())
+                .unwrap_or_else(|| profile_id.to_string());
+            return if self.wire_api == jcode_base::config::NamedProviderApi::Responses {
+                format!("{} (Responses API)", label)
+            } else {
+                label
+            };
         }
 
         // Non-aggregator endpoint without a known profile id: classify by base
@@ -1331,7 +1336,13 @@ impl OpenRouterProvider {
             .map(|profile_id| format!("openai-compatible:{}", profile_id))
             .unwrap_or_else(|| "openai-compatible".to_string());
 
-        Some((provider_label, api_method, self.api_base.clone()))
+        let detail = if self.wire_api == jcode_base::config::NamedProviderApi::Responses {
+            format!("Responses API · {}", self.api_base)
+        } else {
+            self.api_base.clone()
+        };
+
+        Some((provider_label, api_method, detail))
     }
 
     /// The account/device flow exchanges its one-time browser approval for a
@@ -1443,6 +1454,7 @@ impl OpenRouterProvider {
             model: Arc::new(RwLock::new(model)),
             reasoning_effort: Arc::new(RwLock::new(initial_reasoning_effort)),
             api_base,
+            wire_api: profile.api.unwrap_or_default(),
             auth,
             supports_provider_features: matches!(
                 profile.provider_type,
@@ -1655,6 +1667,7 @@ impl OpenRouterProvider {
             model: Arc::new(RwLock::new(model)),
             reasoning_effort: Arc::new(RwLock::new(initial_reasoning_effort)),
             api_base,
+            wire_api: jcode_base::config::NamedProviderApi::ChatCompletions,
             auth,
             supports_provider_features,
             supports_model_catalog,
@@ -1693,6 +1706,7 @@ impl OpenRouterProvider {
             model: Arc::new(RwLock::new(DEFAULT_MODEL.to_string())),
             reasoning_effort: Arc::new(RwLock::new(None)),
             api_base: DEFAULT_API_BASE.to_string(),
+            wire_api: jcode_base::config::NamedProviderApi::ChatCompletions,
             auth: ProviderAuth::AuthorizationBearer {
                 token: api_key,
                 label: DEFAULT_API_KEY_NAME.to_string(),
@@ -1764,6 +1778,7 @@ impl OpenRouterProvider {
             model: Arc::new(RwLock::new(model)),
             reasoning_effort: Arc::new(RwLock::new(initial_reasoning_effort)),
             api_base,
+            wire_api: jcode_base::config::NamedProviderApi::ChatCompletions,
             auth,
             supports_provider_features: false,
             supports_model_catalog: true,
@@ -1988,6 +2003,7 @@ impl OpenRouterProvider {
                 model: Arc::new(RwLock::new(model_name.clone())),
                 reasoning_effort: Arc::new(RwLock::new(None)),
                 api_base,
+                wire_api: jcode_base::config::NamedProviderApi::ChatCompletions,
                 auth,
                 supports_provider_features: true,
                 supports_model_catalog: true,

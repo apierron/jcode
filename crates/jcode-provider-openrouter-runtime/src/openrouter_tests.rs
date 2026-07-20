@@ -1094,6 +1094,7 @@ fn make_provider() -> OpenRouterProvider {
         model: Arc::new(RwLock::new(DEFAULT_MODEL.to_string())),
         reasoning_effort: Arc::new(RwLock::new(None)),
         api_base: DEFAULT_API_BASE.to_string(),
+        wire_api: jcode_base::config::NamedProviderApi::ChatCompletions,
         auth: ProviderAuth::AuthorizationBearer {
             token: "test".to_string(),
             label: DEFAULT_API_KEY_NAME.to_string(),
@@ -1123,6 +1124,7 @@ fn make_custom_compatible_provider() -> OpenRouterProvider {
         model: Arc::new(RwLock::new(DEFAULT_MODEL.to_string())),
         reasoning_effort: Arc::new(RwLock::new(None)),
         api_base: "https://compat.example.test/v1".to_string(),
+        wire_api: jcode_base::config::NamedProviderApi::ChatCompletions,
         auth: ProviderAuth::AuthorizationBearer {
             token: "test".to_string(),
             label: "OPENAI_COMPAT_API_KEY".to_string(),
@@ -1584,6 +1586,68 @@ fn direct_openai_compatible_chat_request_serializes_reasoning_effort_vocabulary(
             "direct compatible request must request streaming usage: {request}"
         );
     }
+}
+
+#[test]
+fn named_responses_profile_uses_responses_wire_shape_and_native_max() {
+    let (api_base, request_rx) = spawn_single_response_chat_server();
+    let config = jcode_base::config::NamedProviderConfig {
+        base_url: api_base,
+        api: Some(jcode_base::config::NamedProviderApi::Responses),
+        api_key: Some("test".to_string()),
+        default_model: Some("gpt-5.6-sol".to_string()),
+        supports_reasoning_effort: Some(true),
+        ..Default::default()
+    };
+    let provider = OpenRouterProvider::new_named_openai_compatible("azure-credit", &config)
+        .expect("Responses provider");
+    assert_eq!(
+        provider.available_efforts(),
+        jcode_provider_core::OPENAI_SELECTABLE_EFFORTS
+    );
+    assert_eq!(
+        provider.runtime_display_name(),
+        "azure-credit (Responses API)"
+    );
+    provider
+        .set_reasoning_effort("max")
+        .expect("Responses API supports literal max");
+
+    let messages = vec![Message {
+        role: Role::User,
+        content: vec![ContentBlock::Text {
+            text: "hello".to_string(),
+            cache_control: None,
+        }],
+        timestamp: None,
+        tool_duration_ms: None,
+    }];
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    rt.block_on(async {
+        let mut stream = provider
+            .complete(&messages, &[], "be concise", None)
+            .await
+            .expect("fake Responses request should start");
+        while let Some(event) = stream.next().await {
+            event.expect("Responses stream event should parse");
+        }
+    });
+
+    let request = request_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("capture fake Responses request");
+    assert!(
+        request.starts_with("POST /v1/responses "),
+        "unexpected Responses request: {request}"
+    );
+    assert!(request.contains(r#""input":[{"content":[{"text":"hello","type":"input_text"}],"role":"user","type":"message"}]"#));
+    assert!(request.contains(r#""instructions":"be concise""#));
+    assert!(request.contains(r#""reasoning":{"effort":"max"}"#));
+    assert!(!request.contains(r#""messages":"#));
+    assert!(!request.contains("reasoning_effort"));
 }
 
 #[test]
@@ -2683,6 +2747,7 @@ fn midstream_transport_fault_emits_retry_rollback_before_replay() {
             tx,
             Arc::new(Mutex::new(None)),
             "test-model".to_string(),
+            jcode_base::config::NamedProviderApi::ChatCompletions,
         )
         .await;
 
