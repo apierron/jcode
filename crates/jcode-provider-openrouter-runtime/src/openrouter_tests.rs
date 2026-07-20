@@ -2794,7 +2794,6 @@ fn compat_profile_serving_gpt_family_model_supports_reasoning_effort() {
             provider.available_efforts(),
             vec![
                 "none",
-                "minimal",
                 "low",
                 "medium",
                 "high",
@@ -2802,7 +2801,7 @@ fn compat_profile_serving_gpt_family_model_supports_reasoning_effort() {
                 "swarm",
                 "swarm-deep"
             ],
-            "{model} should expose the portable compatible effort vocabulary"
+            "{model} should expose the Azure-safe compatible effort vocabulary"
         );
         provider
             .set_reasoning_effort("high")
@@ -2811,6 +2810,8 @@ fn compat_profile_serving_gpt_family_model_supports_reasoning_effort() {
         // Endpoints that support native max can still receive it explicitly.
         provider.set_reasoning_effort("max").unwrap();
         assert_eq!(provider.reasoning_effort(), Some("max".to_string()));
+        provider.set_reasoning_effort("minimal").unwrap();
+        assert_eq!(provider.reasoning_effort(), Some("minimal".to_string()));
     }
 
     // Explicit config override still wins in the off direction.
@@ -2897,7 +2898,7 @@ fn named_profile_construction_reads_openai_reasoning_effort_config() {
     assert_eq!(provider.reasoning_effort().as_deref(), Some("xhigh"));
     assert_eq!(
         provider.available_efforts(),
-        jcode_provider_core::OPENROUTER_SELECTABLE_EFFORTS,
+        jcode_provider_core::OPENAI_COMPATIBLE_SELECTABLE_EFFORTS,
         "compatible GPT profiles must use the portable GPT vocabulary"
     );
     provider.set_reasoning_effort("max").expect(

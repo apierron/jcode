@@ -32,6 +32,22 @@ pub const OPENROUTER_SELECTABLE_EFFORTS: &[&str] = &[
     "swarm-deep",
 ];
 
+/// Portable effort levels for direct OpenAI-compatible GPT endpoints.
+///
+/// Azure OpenAI deployments reject both `minimal` and `max`, while native
+/// OpenAI and OpenRouter expose broader vocabularies. Keep the compatible
+/// picker to the intersection verified across these gateways. A runtime may
+/// still pass through an explicitly configured provider-specific value.
+pub const OPENAI_COMPATIBLE_SELECTABLE_EFFORTS: &[&str] = &[
+    "none",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "swarm",
+    "swarm-deep",
+];
+
 /// Direct DeepSeek effort levels, followed by Jcode's swarm modes.
 pub const DEEPSEEK_SELECTABLE_EFFORTS: &[&str] = &[
     "none",
@@ -82,11 +98,10 @@ pub fn inferred_reasoning_efforts(
         || model.starts_with("o5");
     if provider.contains("openai-compatible") {
         return if is_openai_model {
-            // `max` is native-OpenAI-specific: Azure and other compatible GPT
-            // gateways commonly top out at `xhigh`. Keep the inferred picker
-            // ladder to the portable subset; runtimes may still accept an
-            // explicitly configured `max` when their endpoint supports it.
-            OPENROUTER_SELECTABLE_EFFORTS.to_vec()
+            // Azure and other compatible GPT gateways commonly expose the
+            // portable none|low|medium|high|xhigh vocabulary. Keep broader
+            // native values available only through explicit configuration.
+            OPENAI_COMPATIBLE_SELECTABLE_EFFORTS.to_vec()
         } else {
             Vec::new()
         };
@@ -133,11 +148,13 @@ mod tests {
         assert!(OPENAI_SELECTABLE_EFFORTS.contains(&"minimal"));
         assert!(OPENROUTER_SELECTABLE_EFFORTS.contains(&"minimal"));
         assert!(!OPENROUTER_SELECTABLE_EFFORTS.contains(&"max"));
+        assert!(!OPENAI_COMPATIBLE_SELECTABLE_EFFORTS.contains(&"minimal"));
+        assert!(!OPENAI_COMPATIBLE_SELECTABLE_EFFORTS.contains(&"max"));
         assert!(DEEPSEEK_SELECTABLE_EFFORTS.contains(&"max"));
         assert_eq!(
             inferred_reasoning_efforts(Some("openai-compatible:custom"), Some("gpt-5.6")),
-            OPENROUTER_SELECTABLE_EFFORTS,
-            "compatible runtimes should not advertise nonportable max"
+            OPENAI_COMPATIBLE_SELECTABLE_EFFORTS,
+            "compatible runtimes should advertise only the portable vocabulary"
         );
     }
 

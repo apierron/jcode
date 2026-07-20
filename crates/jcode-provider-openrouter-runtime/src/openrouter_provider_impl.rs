@@ -451,7 +451,15 @@ impl Provider for OpenRouterProvider {
         }
         let requested = effort.trim().to_ascii_lowercase();
         let mut accepted = self.available_efforts().contains(&requested.as_str());
-        if !self.supports_deepseek_reasoning_effort() && requested == "max" {
+        if self.supports_openai_reasoning_effort()
+            && matches!(requested.as_str(), "minimal" | "max")
+        {
+            // Direct compatible pickers expose only the portable Azure-safe
+            // subset, but endpoints with a broader vocabulary can still opt in
+            // through config or an explicit command.
+            accepted = true;
+        } else if !self.supports_deepseek_reasoning_effort() && requested == "max" {
+            // OpenRouter accepts max as an alias for xhigh.
             accepted = true;
         }
         if !requested.is_empty() && !accepted {
@@ -473,7 +481,7 @@ impl Provider for OpenRouterProvider {
         if self.supports_deepseek_reasoning_effort() {
             jcode_provider_core::DEEPSEEK_SELECTABLE_EFFORTS.to_vec()
         } else if self.supports_openai_reasoning_effort() {
-            jcode_provider_core::OPENROUTER_SELECTABLE_EFFORTS.to_vec()
+            jcode_provider_core::OPENAI_COMPATIBLE_SELECTABLE_EFFORTS.to_vec()
         } else if Self::profile_supports_unified_reasoning(
             self.profile_id.as_deref(),
             self.send_openrouter_headers,

@@ -1758,13 +1758,21 @@ fn test_model_picker_effort_variants_follow_each_route_vocabulary() {
     assert!(has_route_effort(
         "gpt-5.6-sol",
         "openai-compatible:azure-credit",
-        "minimal"
+        "low"
     ));
     assert!(has_route_effort(
         "gpt-5.6-sol",
         "openai-compatible:azure-credit",
         "xhigh"
     ));
+    assert!(
+        !has_route_effort(
+            "gpt-5.6-sol",
+            "openai-compatible:azure-credit",
+            "minimal"
+        ),
+        "compatible routes must not advertise minimal because Azure GPT rejects it"
+    );
     assert!(
         !has_route_effort(
             "gpt-5.6-sol",
