@@ -89,7 +89,7 @@ fn inferred_reasoning_efforts_use_provider_specific_order_and_max_semantics() {
     assert_eq!(
         inferred_reasoning_efforts(Some("openai-compatible:custom"), Some("o5-mini")),
         jcode_provider_core::OPENAI_COMPATIBLE_SELECTABLE_EFFORTS,
-        "compatible routes use the portable ladder because Azure GPT rejects minimal and max"
+        "compatible routes omit minimal and map the max control to Azure's xhigh wire value"
     );
     assert_eq!(
         inferred_reasoning_efforts(Some("anthropic"), Some("claude-sonnet-4-6")),

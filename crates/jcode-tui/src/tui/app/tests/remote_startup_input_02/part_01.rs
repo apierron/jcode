@@ -1773,14 +1773,11 @@ fn test_model_picker_effort_variants_follow_each_route_vocabulary() {
         ),
         "compatible routes must not advertise minimal because Azure GPT rejects it"
     );
-    assert!(
-        !has_route_effort(
-            "gpt-5.6-sol",
-            "openai-compatible:azure-credit",
-            "max"
-        ),
-        "compatible routes must not advertise max because it is rejected by Azure GPT gateways"
-    );
+    assert!(has_route_effort(
+        "gpt-5.6-sol",
+        "openai-compatible:azure-credit",
+        "max"
+    ));
 
     let compatible_qwen_rows: Vec<_> = picker
         .entries

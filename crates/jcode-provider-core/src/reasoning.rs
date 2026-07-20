@@ -34,16 +34,18 @@ pub const OPENROUTER_SELECTABLE_EFFORTS: &[&str] = &[
 
 /// Portable effort levels for direct OpenAI-compatible GPT endpoints.
 ///
-/// Azure OpenAI deployments reject both `minimal` and `max`, while native
-/// OpenAI and OpenRouter expose broader vocabularies. Keep the compatible
-/// picker to the intersection verified across these gateways. A runtime may
-/// still pass through an explicitly configured provider-specific value.
+/// Azure OpenAI deployments reject `minimal` and the literal wire value `max`,
+/// while accepting `xhigh` as their strongest value. Jcode still exposes its
+/// `max` control here; compatible runtimes map that control to `xhigh` on the
+/// wire. A runtime may still pass through an explicitly configured `minimal`
+/// for endpoints with a broader vocabulary.
 pub const OPENAI_COMPATIBLE_SELECTABLE_EFFORTS: &[&str] = &[
     "none",
     "low",
     "medium",
     "high",
     "xhigh",
+    "max",
     "swarm",
     "swarm-deep",
 ];
@@ -98,9 +100,9 @@ pub fn inferred_reasoning_efforts(
         || model.starts_with("o5");
     if provider.contains("openai-compatible") {
         return if is_openai_model {
-            // Azure and other compatible GPT gateways commonly expose the
-            // portable none|low|medium|high|xhigh vocabulary. Keep broader
-            // native values available only through explicit configuration.
+            // Azure and other compatible GPT gateways commonly use `xhigh` as
+            // their strongest wire value. The runtime maps Jcode's `max`
+            // control to that portable value.
             OPENAI_COMPATIBLE_SELECTABLE_EFFORTS.to_vec()
         } else {
             Vec::new()
@@ -149,12 +151,12 @@ mod tests {
         assert!(OPENROUTER_SELECTABLE_EFFORTS.contains(&"minimal"));
         assert!(!OPENROUTER_SELECTABLE_EFFORTS.contains(&"max"));
         assert!(!OPENAI_COMPATIBLE_SELECTABLE_EFFORTS.contains(&"minimal"));
-        assert!(!OPENAI_COMPATIBLE_SELECTABLE_EFFORTS.contains(&"max"));
+        assert!(OPENAI_COMPATIBLE_SELECTABLE_EFFORTS.contains(&"max"));
         assert!(DEEPSEEK_SELECTABLE_EFFORTS.contains(&"max"));
         assert_eq!(
             inferred_reasoning_efforts(Some("openai-compatible:custom"), Some("gpt-5.6")),
             OPENAI_COMPATIBLE_SELECTABLE_EFFORTS,
-            "compatible runtimes should advertise only the portable vocabulary"
+            "compatible runtimes should expose max as an xhigh wire alias"
         );
     }
 
