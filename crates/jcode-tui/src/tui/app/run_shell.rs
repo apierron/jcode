@@ -399,11 +399,10 @@ impl App {
                             // Coalesce an already-buffered input burst before drawing. This keeps
                             // the async EventStream as the sole crossterm reader while avoiding a
                             // full terminal repaint for every wheel packet or typed character.
-                            for event in event_stream
+                            let ready_events = event_stream
                                 .drain_ready::<{ MAX_COALESCED_TERMINAL_EVENTS - 1 }>()
-                                .into_iter()
-                                .flatten()
-                            {
+                                .into_iter();
+                            for event in ready_events.flatten() {
                                 needs_redraw |= local::handle_terminal_event(
                                     &mut self,
                                     &mut terminal,
@@ -624,11 +623,10 @@ impl App {
                     event = event_stream.next() => {
                         if event.is_some() {
                             needs_redraw |= remote::handle_terminal_event(&mut self, &mut terminal, &mut remote_conn, event).await?;
-                            for event in event_stream
+                            let ready_events = event_stream
                                 .drain_ready::<{ MAX_COALESCED_TERMINAL_EVENTS - 1 }>()
-                                .into_iter()
-                                .flatten()
-                            {
+                                .into_iter();
+                            for event in ready_events.flatten() {
                                 needs_redraw |= remote::handle_terminal_event(
                                     &mut self,
                                     &mut terminal,

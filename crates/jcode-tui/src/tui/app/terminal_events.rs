@@ -1,25 +1,42 @@
 use crossterm::event::{
     Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
-use futures::{FutureExt, Stream, StreamExt};
+use futures::StreamExt;
 use std::{collections::VecDeque, io, time::Duration};
+use tokio::sync::mpsc;
 
 const FRAGMENT_TIMEOUT: Duration = Duration::from_millis(25);
 const MAX_SGR_MOUSE_TAIL_LEN: usize = 32;
+const TERMINAL_EVENT_QUEUE_CAPACITY: usize = 256;
 
 /// Crossterm can emit a fragmented SGR mouse report as `Esc` followed by
 /// printable key events on Unix (crossterm#668). Reassemble those reports at the
 /// input boundary so their text never reaches the composer.
-pub(super) struct EventStream<S = crossterm::event::EventStream> {
-    inner: S,
+pub(super) struct EventStream {
+    inner: mpsc::Receiver<io::Result<Event>>,
     replay: VecDeque<io::Result<Event>>,
     pending_escape: Option<PendingEscape>,
 }
 
 impl EventStream {
     pub(super) fn new() -> Self {
+        let (tx, rx) = mpsc::channel(TERMINAL_EVENT_QUEUE_CAPACITY);
+        tokio::spawn(async move {
+            let mut inner = crossterm::event::EventStream::new();
+            loop {
+                tokio::select! {
+                    _ = tx.closed() => break,
+                    event = inner.next() => {
+                        let Some(event) = event else { break };
+                        if tx.send(event).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
         Self {
-            inner: crossterm::event::EventStream::new(),
+            inner: rx,
             replay: VecDeque::new(),
             pending_escape: None,
         }
@@ -33,12 +50,9 @@ struct PendingEscape {
     fragment_deadline: tokio::time::Instant,
 }
 
-impl<S> EventStream<S>
-where
-    S: Stream<Item = io::Result<Event>> + Unpin,
-{
+impl EventStream {
     #[cfg(test)]
-    fn with_inner(inner: S) -> Self {
+    fn with_inner(inner: mpsc::Receiver<io::Result<Event>>) -> Self {
         Self {
             inner,
             replay: VecDeque::new(),
@@ -52,7 +66,7 @@ where
                 return Some(event);
             }
 
-            let first = self.inner.next().await?;
+            let first = self.inner.recv().await?;
             if !first.as_ref().is_ok_and(is_plain_escape) {
                 return Some(first);
             }
@@ -77,7 +91,7 @@ where
             }
 
             let deadline = self.pending_escape.as_ref()?.fragment_deadline;
-            let next = match tokio::time::timeout_at(deadline, self.inner.next()).await {
+            let next = match tokio::time::timeout_at(deadline, self.inner.recv()).await {
                 Ok(Some(event)) => event,
                 _ => return self.finish_pending_escape(),
             };
@@ -104,7 +118,58 @@ where
     /// Poll one event without waiting. Partially consumed Escape packets stay
     /// on `self`, so dropping the pending future is cancellation-safe.
     pub(super) fn next_ready(&mut self) -> Option<Option<io::Result<Event>>> {
-        self.next().now_or_never()
+        if self.pending_escape.is_none() {
+            if let Some(event) = self.replay.pop_front() {
+                return Some(Some(event));
+            }
+            let first = match self.inner.try_recv() {
+                Ok(event) => event,
+                Err(mpsc::error::TryRecvError::Empty) => return None,
+                Err(mpsc::error::TryRecvError::Disconnected) => return Some(None),
+            };
+            if !first.as_ref().is_ok_and(is_plain_escape) {
+                return Some(Some(first));
+            }
+            self.pending_escape = Some(PendingEscape {
+                first,
+                tail: String::new(),
+                captured: Vec::new(),
+                fragment_deadline: tokio::time::Instant::now() + FRAGMENT_TIMEOUT,
+            });
+        }
+
+        loop {
+            let pending = self.pending_escape.as_ref()?;
+            if pending.tail.len() >= MAX_SGR_MOUSE_TAIL_LEN
+                || pending.fragment_deadline <= tokio::time::Instant::now()
+            {
+                return Some(self.finish_pending_escape());
+            }
+            let next = match self.inner.try_recv() {
+                Ok(event) => event,
+                Err(mpsc::error::TryRecvError::Empty) => return None,
+                Err(mpsc::error::TryRecvError::Disconnected) => {
+                    return Some(self.finish_pending_escape());
+                }
+            };
+            let Some(ch) = next.as_ref().ok().and_then(sgr_tail_char) else {
+                self.pending_escape.as_mut()?.captured.push(next);
+                return Some(self.finish_pending_escape());
+            };
+
+            let pending = self.pending_escape.as_mut()?;
+            pending.tail.push(ch);
+            pending.captured.push(next);
+            pending.fragment_deadline = tokio::time::Instant::now() + FRAGMENT_TIMEOUT;
+
+            if let Some(mouse) = parse_sgr_mouse_tail(&pending.tail) {
+                self.pending_escape = None;
+                return Some(Some(Ok(Event::Mouse(mouse))));
+            }
+            if !is_sgr_mouse_tail_prefix(&pending.tail) {
+                return Some(self.finish_pending_escape());
+            }
+        }
     }
 
     pub(super) fn drain_ready<const N: usize>(&mut self) -> [Option<io::Result<Event>>; N] {
@@ -221,7 +286,6 @@ fn parse_sgr_mouse_tail(tail: &str) -> Option<MouseEvent> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::channel::mpsc;
 
     #[test]
     fn parses_fragmented_scroll_report() {
@@ -244,12 +308,13 @@ mod tests {
 
     #[tokio::test]
     async fn preserves_escape_and_fragments_when_next_is_cancelled() {
-        let (tx, rx) = mpsc::unbounded();
+        let (tx, rx) = mpsc::channel(32);
         let mut stream = EventStream::with_inner(rx);
-        tx.unbounded_send(Ok(Event::Key(KeyEvent::new(
+        tx.send(Ok(Event::Key(KeyEvent::new(
             KeyCode::Esc,
             KeyModifiers::NONE,
         ))))
+        .await
         .unwrap();
 
         // Poll through consuming Esc, then cancel while waiting for its tail.
@@ -261,10 +326,11 @@ mod tests {
         }
 
         for ch in "[<65;50;24M".chars() {
-            tx.unbounded_send(Ok(Event::Key(KeyEvent::new(
+            tx.send(Ok(Event::Key(KeyEvent::new(
                 KeyCode::Char(ch),
                 KeyModifiers::NONE,
             ))))
+            .await
             .unwrap();
         }
 
@@ -281,10 +347,10 @@ mod tests {
 
     #[tokio::test]
     async fn cancellation_does_not_restart_escape_fragment_timeout() {
-        let (tx, rx) = mpsc::unbounded();
+        let (tx, rx) = mpsc::channel(32);
         let mut stream = EventStream::with_inner(rx);
         let escape = Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-        tx.unbounded_send(Ok(escape.clone())).unwrap();
+        tx.send(Ok(escape.clone())).await.unwrap();
 
         {
             let future = stream.next();
@@ -303,13 +369,14 @@ mod tests {
 
     #[tokio::test]
     async fn ready_events_can_be_coalesced_through_the_same_reader() {
-        let (tx, rx) = mpsc::unbounded();
+        let (tx, rx) = mpsc::channel(32);
         let mut stream = EventStream::with_inner(rx);
         for ch in "abc".chars() {
-            tx.unbounded_send(Ok(Event::Key(KeyEvent::new(
+            tx.send(Ok(Event::Key(KeyEvent::new(
                 KeyCode::Char(ch),
                 KeyModifiers::NONE,
             ))))
+            .await
             .unwrap();
         }
 
@@ -326,5 +393,23 @@ mod tests {
             chars,
             [KeyCode::Char('a'), KeyCode::Char('b'), KeyCode::Char('c')]
         );
+    }
+
+    #[tokio::test]
+    async fn queued_reader_wakes_a_pending_next_call() {
+        let (tx, rx) = mpsc::channel(1);
+        let mut stream = EventStream::with_inner(rx);
+        let expected = Event::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        let next = stream.next();
+        tokio::pin!(next);
+        assert!(futures::poll!(next.as_mut()).is_pending());
+
+        tx.send(Ok(expected.clone())).await.unwrap();
+        let received = tokio::time::timeout(Duration::from_millis(20), next)
+            .await
+            .expect("the queue must preserve the receiver wake")
+            .unwrap()
+            .unwrap();
+        assert_eq!(received, expected);
     }
 }
