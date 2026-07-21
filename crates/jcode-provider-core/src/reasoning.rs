@@ -104,6 +104,10 @@ pub fn inferred_reasoning_efforts(
         || model.starts_with("o4")
         || model.starts_with("o5");
 
+    if provider.contains("reasoning effort disabled") {
+        return Vec::new();
+    }
+
     if provider.contains("responses") && is_openai_model {
         return OPENAI_COMPATIBLE_RESPONSES_SELECTABLE_EFFORTS.to_vec();
     }
@@ -186,6 +190,14 @@ mod tests {
         );
         assert!(!OPENAI_COMPATIBLE_RESPONSES_SELECTABLE_EFFORTS.contains(&"minimal"));
         assert!(OPENAI_COMPATIBLE_RESPONSES_SELECTABLE_EFFORTS.contains(&"max"));
+        assert!(
+            inferred_reasoning_efforts(
+                Some("azure-credit-chat (Chat Completions API; reasoning effort disabled)"),
+                Some("gpt-5.6-sol")
+            )
+            .is_empty(),
+            "an explicitly effort-disabled profile must not expose remote effort controls"
+        );
     }
 
     #[test]

@@ -1734,6 +1734,14 @@ fn test_model_picker_effort_variants_follow_each_route_vocabulary() {
         detail: "Responses API · https://example.openai.azure.com/openai/v1".to_string(),
         cheapness: None,
     });
+    app.remote_model_options.push(crate::provider::ModelRoute {
+        model: "gpt-5.6-luna".to_string(),
+        provider: "Azure Chat".to_string(),
+        api_method: "openai-compatible:azure-chat".to_string(),
+        available: true,
+        detail: "Reasoning effort disabled · Chat Completions API · https://example.openai.azure.com/openai/v1".to_string(),
+        cheapness: None,
+    });
 
     app.open_model_picker();
     let picker = app
@@ -1799,6 +1807,22 @@ fn test_model_picker_effort_variants_follow_each_route_vocabulary() {
         "openai-compatible:azure-responses",
         "max"
     ));
+    assert!(
+        !picker.entries.iter().any(|entry| {
+            entry.name.starts_with("gpt-5.6-luna (")
+                && entry.options.first().is_some_and(|route| {
+                    route.api_method == "openai-compatible:azure-chat"
+                })
+        }),
+        "effort-disabled Chat routes must not render effort variants"
+    );
+    assert!(picker.entries.iter().any(|entry| {
+        entry.name == "gpt-5.6-luna"
+            && entry.effort.is_none()
+            && entry.options.first().is_some_and(|route| {
+                route.api_method == "openai-compatible:azure-chat"
+            })
+    }));
 
     let compatible_qwen_rows: Vec<_> = picker
         .entries

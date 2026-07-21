@@ -520,12 +520,15 @@ fn named_provider_profile_routes(
     } else {
         profile_config.base_url.trim().to_string()
     };
-    let detail = match profile_config.api.unwrap_or_default() {
+    let mut detail = match profile_config.api.unwrap_or_default() {
         crate::config::NamedProviderApi::Responses => format!("Responses API · {}", base_detail),
         crate::config::NamedProviderApi::ChatCompletions => {
             format!("Chat Completions API · {}", base_detail)
         }
     };
+    if profile_config.supports_reasoning_effort == Some(false) {
+        detail = format!("Reasoning effort disabled · {detail}");
+    }
 
     let mut routes: Vec<ModelRoute> = Vec::new();
     for model in models {

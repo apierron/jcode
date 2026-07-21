@@ -1275,10 +1275,17 @@ impl OpenRouterProvider {
             let label = openai_compatible_profile_by_id(profile_id)
                 .map(|profile| profile.display_name.to_string())
                 .unwrap_or_else(|| profile_id.to_string());
-            return if self.wire_api == jcode_base::config::NamedProviderApi::Responses {
-                format!("{} (Responses API)", label)
-            } else {
-                label
+            return match (self.wire_api, self.reasoning_effort_support) {
+                (jcode_base::config::NamedProviderApi::Responses, _) => {
+                    format!("{} (Responses API)", label)
+                }
+                (jcode_base::config::NamedProviderApi::ChatCompletions, Some(false)) => {
+                    format!(
+                        "{} (Chat Completions API; reasoning effort disabled)",
+                        label
+                    )
+                }
+                (jcode_base::config::NamedProviderApi::ChatCompletions, _) => label,
             };
         }
 
@@ -1336,7 +1343,7 @@ impl OpenRouterProvider {
             .map(|profile_id| format!("openai-compatible:{}", profile_id))
             .unwrap_or_else(|| "openai-compatible".to_string());
 
-        let detail = match self.wire_api {
+        let mut detail = match self.wire_api {
             jcode_base::config::NamedProviderApi::Responses => {
                 format!("Responses API · {}", self.api_base)
             }
@@ -1344,6 +1351,9 @@ impl OpenRouterProvider {
                 format!("Chat Completions API · {}", self.api_base)
             }
         };
+        if self.reasoning_effort_support == Some(false) {
+            detail = format!("Reasoning effort disabled · {detail}");
+        }
 
         Some((provider_label, api_method, detail))
     }

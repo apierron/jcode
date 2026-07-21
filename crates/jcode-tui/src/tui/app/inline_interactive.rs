@@ -80,7 +80,13 @@ fn model_picker_favorites_path() -> Option<std::path::PathBuf> {
 /// Effort rows are only rendered for these routes; other routes (Copilot,
 /// Bedrock, Antigravity CLI, remote-catalog placeholders, ...) get one plain
 /// row per model because a picked effort could not actually be applied.
-fn route_supports_reasoning_effort(api_method: &str) -> bool {
+fn route_supports_reasoning_effort(api_method: &str, detail: &str) -> bool {
+    if detail
+        .to_ascii_lowercase()
+        .contains("reasoning effort disabled")
+    {
+        return false;
+    }
     use crate::provider::ModelRouteApiMethod as Method;
     match Method::parse(api_method) {
         Method::ClaudeOAuth
@@ -1344,7 +1350,7 @@ impl App {
             let mut plain_routes = Vec::new();
             let mut model_efforts = Vec::new();
             for route in entry_routes {
-                let efforts = if route_supports_reasoning_effort(&route.api_method) {
+                let efforts = if route_supports_reasoning_effort(&route.api_method, &route.detail) {
                     let provider_identity =
                         if route.detail.to_ascii_lowercase().contains("responses api") {
                             format!("{} responses api", route.api_method)
@@ -3818,25 +3824,31 @@ mod tests {
 
     #[test]
     fn route_effort_support_covers_effort_capable_runtimes_only() {
-        assert!(route_supports_reasoning_effort("claude-oauth"));
-        assert!(route_supports_reasoning_effort("claude-api"));
-        assert!(route_supports_reasoning_effort("openai-oauth"));
-        assert!(route_supports_reasoning_effort("openai-api-key"));
-        assert!(route_supports_reasoning_effort("openrouter"));
+        assert!(route_supports_reasoning_effort("claude-oauth", ""));
+        assert!(route_supports_reasoning_effort("claude-api", ""));
+        assert!(route_supports_reasoning_effort("openai-oauth", ""));
+        assert!(route_supports_reasoning_effort("openai-api-key", ""));
+        assert!(route_supports_reasoning_effort("openrouter", ""));
         assert!(route_supports_reasoning_effort(
-            "openai-compatible:custom-gateway"
+            "openai-compatible:custom-gateway",
+            ""
         ));
 
-        assert!(!route_supports_reasoning_effort("copilot"));
-        assert!(!route_supports_reasoning_effort("bedrock"));
-        assert!(!route_supports_reasoning_effort("https"));
+        assert!(!route_supports_reasoning_effort("copilot", ""));
+        assert!(!route_supports_reasoning_effort("bedrock", ""));
+        assert!(!route_supports_reasoning_effort("https", ""));
         // Compatible runtimes support effort conditionally. Model inference
         // still suppresses effort rows for non-reasoning models.
         assert!(route_supports_reasoning_effort(
-            "openai-compatible:llamacpp"
+            "openai-compatible:llamacpp",
+            ""
         ));
-        assert!(!route_supports_reasoning_effort("remote-catalog"));
-        assert!(!route_supports_reasoning_effort("current"));
+        assert!(!route_supports_reasoning_effort(
+            "openai-compatible:azure-credit-chat",
+            "Reasoning effort disabled · Chat Completions API"
+        ));
+        assert!(!route_supports_reasoning_effort("remote-catalog", ""));
+        assert!(!route_supports_reasoning_effort("current", ""));
     }
 
     #[test]

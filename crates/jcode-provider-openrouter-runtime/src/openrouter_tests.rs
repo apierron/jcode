@@ -2940,6 +2940,71 @@ fn named_profile_supports_reasoning_effort_config_override() {
     );
 }
 
+#[test]
+fn effort_disabled_named_chat_profile_keeps_tools_and_omits_reasoning_effort() {
+    let (api_base, request_rx) = spawn_single_response_chat_server();
+    let config = jcode_base::config::NamedProviderConfig {
+        base_url: api_base,
+        api: Some(jcode_base::config::NamedProviderApi::ChatCompletions),
+        api_key: Some("test".to_string()),
+        default_model: Some("gpt-5.6-sol".to_string()),
+        supports_reasoning_effort: Some(false),
+        ..Default::default()
+    };
+    let provider = OpenRouterProvider::new_named_openai_compatible("azure-credit-chat", &config)
+        .expect("Chat provider");
+    assert!(provider.available_efforts().is_empty());
+    assert_eq!(provider.reasoning_effort(), None);
+    assert!(provider.set_reasoning_effort("xhigh").is_err());
+    assert!(
+        provider
+            .runtime_display_name()
+            .contains("reasoning effort disabled")
+    );
+    assert!(
+        provider
+            .direct_openai_compatible_route_parts()
+            .expect("direct route")
+            .2
+            .contains("Reasoning effort disabled")
+    );
+
+    let messages = vec![Message {
+        role: Role::User,
+        content: vec![ContentBlock::Text {
+            text: "hello".to_string(),
+            cache_control: None,
+        }],
+        timestamp: None,
+        tool_duration_ms: None,
+    }];
+    let tools = vec![ToolDefinition {
+        name: "read".to_string(),
+        description: "Read a file".to_string(),
+        input_schema: serde_json::json!({"type": "object", "properties": {}}),
+    }];
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    rt.block_on(async {
+        let mut stream = provider
+            .complete(&messages, &tools, "", None)
+            .await
+            .expect("fake Chat request should start");
+        while let Some(event) = stream.next().await {
+            event.expect("stream event should parse");
+        }
+    });
+
+    let request = request_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("capture fake provider request");
+    assert!(request.contains(r#""tools":[{"function""#), "{request}");
+    assert!(!request.contains("reasoning_effort"), "{request}");
+    assert!(!request.contains(r#""reasoning":{"#), "{request}");
+}
+
 /// Issue #352: named profiles construct with the user's configured
 /// `openai_reasoning_effort` when the profile supports effort, instead of
 /// silently ignoring the config.
