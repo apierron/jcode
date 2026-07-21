@@ -42,6 +42,31 @@ impl Provider for MockProvider {
     fn model(&self) -> String {
         "mock-model".to_string()
     }
+
+    fn available_models_display(&self) -> Vec<String> {
+        vec!["allowed-model".to_string(), "blocked-model".to_string()]
+    }
+
+    fn model_routes(&self) -> Vec<crate::provider::ModelRoute> {
+        vec![
+            crate::provider::ModelRoute {
+                model: "allowed-model".to_string(),
+                provider: "allowed-profile".to_string(),
+                api_method: "openai-compatible:allowed-profile".to_string(),
+                available: true,
+                detail: String::new(),
+                cheapness: None,
+            },
+            crate::provider::ModelRoute {
+                model: "blocked-model".to_string(),
+                provider: "blocked-profile".to_string(),
+                api_method: "openai-compatible:blocked-profile".to_string(),
+                available: true,
+                detail: String::new(),
+                cheapness: None,
+            },
+        ]
+    }
 }
 
 #[tokio::test]
@@ -287,6 +312,67 @@ async fn handle_get_model_catalog_does_not_wait_for_busy_agent_lock() {
     } else {
         crate::env::remove_var("JCODE_HOME");
     }
+}
+
+#[tokio::test]
+async fn handle_get_model_catalog_applies_explicit_provider_allowlist() {
+    let _guard = crate::storage::lock_test_env();
+    let temp_home = tempfile::TempDir::new().expect("create temp home");
+    let prev_home = std::env::var_os("JCODE_HOME");
+    crate::env::set_var("JCODE_HOME", temp_home.path());
+    std::fs::write(
+        temp_home.path().join("config.toml"),
+        "[provider]\nmodel_picker_providers = [\"allowed-profile\"]\n",
+    )
+    .expect("write filtered provider config");
+    crate::config::invalidate_config_cache();
+
+    let provider: Arc<dyn Provider> = Arc::new(MockProvider);
+    let agent = Arc::new(Mutex::new(Agent::new_with_session(
+        provider.clone(),
+        Registry::empty(),
+        crate::session::Session::create_with_id("session_filtered_catalog".to_string(), None, None),
+        None,
+    )));
+    let (stream_a, mut stream_b) = crate::transport::stream_pair().expect("stream pair");
+    let (_reader_a, writer_a) = stream_a.into_split();
+    let writer = Arc::new(Mutex::new(writer_a));
+
+    handle_get_model_catalog(44, "session_filtered_catalog", &agent, &provider, &writer)
+        .await
+        .expect("filtered catalog should write");
+    drop(writer);
+
+    let mut bytes = Vec::new();
+    stream_b
+        .read_to_end(&mut bytes)
+        .await
+        .expect("read filtered catalog");
+    let event: crate::protocol::ServerEvent = serde_json::from_slice(
+        bytes
+            .split(|byte| *byte == b'\n')
+            .next()
+            .expect("catalog line"),
+    )
+    .expect("decode filtered catalog");
+    let crate::protocol::ServerEvent::History {
+        available_models,
+        available_model_routes,
+        ..
+    } = event
+    else {
+        panic!("expected history catalog event");
+    };
+    assert_eq!(available_models, ["allowed-model"]);
+    assert_eq!(available_model_routes.len(), 1);
+    assert_eq!(available_model_routes[0].provider, "allowed-profile");
+
+    if let Some(prev_home) = prev_home {
+        crate::env::set_var("JCODE_HOME", prev_home);
+    } else {
+        crate::env::remove_var("JCODE_HOME");
+    }
+    crate::config::invalidate_config_cache();
 }
 
 struct ReloadHistoryEnvGuard {

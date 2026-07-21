@@ -300,6 +300,10 @@ pub(crate) struct ReplayRemoteState {
     call_output_tokens_seen: u64,
 }
 
+fn has_explicit_model_picker_provider_allowlist(allowlist: Option<&[String]>) -> bool {
+    allowlist.is_some_and(|providers| providers.iter().any(|provider| !provider.trim().is_empty()))
+}
+
 impl RemoteConnection {
     /// Connect to the server
     pub async fn connect() -> Result<Self> {
@@ -379,7 +383,13 @@ impl RemoteConnection {
         // draw stalls during scrolling. The TUI hydrates the persisted remote
         // catalog cache for normal `/model` use; explicit refresh paths still
         // request fresh catalog data when needed.
-        if std::env::var_os("JCODE_REMOTE_BOOTSTRAP_MODEL_CATALOG").is_some() {
+        let config = crate::config::config();
+        let provider_allowlist = config.provider.model_picker_providers.as_deref();
+        let has_provider_allowlist =
+            has_explicit_model_picker_provider_allowlist(provider_allowlist);
+        if has_provider_allowlist
+            || std::env::var_os("JCODE_REMOTE_BOOTSTRAP_MODEL_CATALOG").is_some()
+        {
             conn.send_request(Request::GetModelCatalog {
                 id: conn.next_request_id,
             })
@@ -1405,6 +1415,18 @@ impl RemoteEventState for ReplayRemoteState {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn explicit_model_picker_provider_allowlist_requests_precise_bootstrap_catalog() {
+        assert!(!has_explicit_model_picker_provider_allowlist(None));
+        assert!(!has_explicit_model_picker_provider_allowlist(Some(&[])));
+        assert!(!has_explicit_model_picker_provider_allowlist(Some(&[
+            "  ".to_string()
+        ])));
+        assert!(has_explicit_model_picker_provider_allowlist(Some(&[
+            "azure-credit".to_string()
+        ])));
+    }
 
     #[tokio::test]
     async fn detached_auth_changed_notification_does_not_wait_for_writer_lock() {

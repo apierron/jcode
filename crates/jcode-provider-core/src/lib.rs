@@ -990,6 +990,47 @@ pub fn normalize_model_route_provider_label(value: &str) -> String {
         .replace([' ', '_', '-'], "")
 }
 
+/// Restrict model routes to an explicit provider/api/profile allowlist.
+///
+/// An absent or blank allowlist is a no-op. A non-empty allowlist is strict:
+/// matching nothing returns no routes rather than silently exposing providers
+/// the operator explicitly excluded.
+pub fn filter_model_routes_by_provider_allowlist(
+    routes: Vec<ModelRoute>,
+    allowlist: Option<&[String]>,
+) -> Vec<ModelRoute> {
+    let Some(allowlist) = allowlist else {
+        return routes;
+    };
+    let allowed: Vec<String> = allowlist
+        .iter()
+        .map(|entry| normalize_model_route_provider_label(entry))
+        .filter(|entry| !entry.is_empty())
+        .collect();
+    if allowed.is_empty() {
+        return routes;
+    }
+
+    routes
+        .into_iter()
+        .filter(|route| {
+            let provider = normalize_model_route_provider_label(&route.provider);
+            let api_method = normalize_model_route_provider_label(&route.api_method);
+            let profile_id = route
+                .api_method
+                .split_once(':')
+                .map(|(_, profile)| normalize_model_route_provider_label(profile))
+                .unwrap_or_default();
+            allowed.iter().any(|entry| {
+                *entry == provider
+                    || *entry == api_method
+                    || (!profile_id.is_empty() && *entry == profile_id)
+                    || model_route_provider_labels_match(&route.provider, entry)
+            })
+        })
+        .collect()
+}
+
 pub fn model_route_provider_labels_match(route_provider: &str, current_provider: &str) -> bool {
     let route = normalize_model_route_provider_label(route_provider);
     let current = normalize_model_route_provider_label(current_provider);
@@ -1409,6 +1450,46 @@ mod tests {
         assert!(!model_route_provider_labels_match("OpenAI", "OpenRouter"));
         assert!(!model_route_provider_labels_match("", ""));
         assert!(!model_route_provider_labels_related("OpenAI", ""));
+    }
+
+    #[test]
+    fn explicit_model_route_provider_allowlist_fails_closed() {
+        let routes = vec![
+            ModelRoute {
+                model: "gpt-5.6-sol".to_string(),
+                provider: "OpenAI".to_string(),
+                api_method: "openai-oauth".to_string(),
+                available: true,
+                detail: String::new(),
+                cheapness: None,
+            },
+            ModelRoute {
+                model: "gpt-5.6-sol".to_string(),
+                provider: "azure-credit".to_string(),
+                api_method: "openai-compatible:azure-credit".to_string(),
+                available: true,
+                detail: "Responses API".to_string(),
+                cheapness: None,
+            },
+        ];
+
+        let filtered = filter_model_routes_by_provider_allowlist(
+            routes.clone(),
+            Some(&["azure-credit".to_string()]),
+        );
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].provider, "azure-credit");
+        assert!(
+            filter_model_routes_by_provider_allowlist(
+                routes.clone(),
+                Some(&["missing-provider".to_string()]),
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            filter_model_routes_by_provider_allowlist(routes, None).len(),
+            2
+        );
     }
 
     #[test]

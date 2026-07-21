@@ -1336,10 +1336,13 @@ impl OpenRouterProvider {
             .map(|profile_id| format!("openai-compatible:{}", profile_id))
             .unwrap_or_else(|| "openai-compatible".to_string());
 
-        let detail = if self.wire_api == jcode_base::config::NamedProviderApi::Responses {
-            format!("Responses API · {}", self.api_base)
-        } else {
-            self.api_base.clone()
+        let detail = match self.wire_api {
+            jcode_base::config::NamedProviderApi::Responses => {
+                format!("Responses API · {}", self.api_base)
+            }
+            jcode_base::config::NamedProviderApi::ChatCompletions => {
+                format!("Chat Completions API · {}", self.api_base)
+            }
         };
 
         Some((provider_label, api_method, detail))

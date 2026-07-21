@@ -188,8 +188,8 @@ pub(super) async fn handle_get_model_catalog(
     let (
         provider_name,
         provider_model,
-        available_models,
-        available_model_routes,
+        mut available_models,
+        mut available_model_routes,
         resolved_credential,
         source,
     ) = {
@@ -222,6 +222,21 @@ pub(super) async fn handle_get_model_catalog(
             }
         }
     };
+    let config = crate::config::config();
+    let provider_allowlist = config.provider.model_picker_providers.as_deref();
+    available_model_routes = crate::provider::filter_model_routes_by_provider_allowlist(
+        available_model_routes,
+        provider_allowlist,
+    );
+    if provider_allowlist
+        .is_some_and(|providers| providers.iter().any(|provider| !provider.trim().is_empty()))
+    {
+        let allowed_models: std::collections::HashSet<&str> = available_model_routes
+            .iter()
+            .map(|route| route.model.as_str())
+            .collect();
+        available_models.retain(|model| allowed_models.contains(model.as_str()));
+    }
     let build_ms = build_started.elapsed().as_millis();
 
     let encode_started = Instant::now();

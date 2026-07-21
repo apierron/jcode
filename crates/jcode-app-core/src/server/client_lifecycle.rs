@@ -1452,9 +1452,6 @@ pub(super) async fn handle_client(
                                 &swarm_event_tx,
                             )
                             .await;
-                            if let Some(snapshot) = try_available_models_snapshot(&agent) {
-                                last_available_models_snapshot = Some(snapshot);
-                            }
                         } else {
                             crate::logging::warn(&format!(
                                 "Target-aware subscribe failed to bind {} from temporary {}; closing temporary client connection {}",
@@ -1515,9 +1512,6 @@ pub(super) async fn handle_client(
                         &swarm_event_tx,
                     )
                     .await;
-                    if let Some(snapshot) = try_available_models_snapshot(&agent) {
-                        last_available_models_snapshot = Some(snapshot);
-                    }
                 }
                 client_subscribed = true;
             }
@@ -1548,9 +1542,6 @@ pub(super) async fn handle_client(
                 // instead of leaving the graph blank until the next plan
                 // mutation broadcast.
                 send_swarm_plan_to_session(&client_session_id, &swarm_members, &swarm_plans).await;
-                if let Some(snapshot) = try_available_models_snapshot(&agent) {
-                    last_available_models_snapshot = Some(snapshot);
-                }
             }
 
             Request::GetModelCatalog { id } => {
@@ -1559,9 +1550,6 @@ pub(super) async fn handle_client(
                     .is_err()
                 {
                     break;
-                }
-                if let Some(snapshot) = try_available_models_snapshot(&agent) {
-                    last_available_models_snapshot = Some(snapshot);
                 }
             }
 
@@ -1664,9 +1652,6 @@ pub(super) async fn handle_client(
                     &soft_interrupt_queues,
                 )
                 .await;
-                if let Some(snapshot) = try_available_models_snapshot(&agent) {
-                    last_available_models_snapshot = Some(snapshot);
-                }
             }
 
             Request::ResumeAllSessions { id } => {
@@ -3041,11 +3026,6 @@ async fn cancel_processing_message(
             ));
         }
     }
-}
-
-fn try_available_models_snapshot(agent: &Arc<Mutex<Agent>>) -> Option<String> {
-    let event = try_available_models_updated_event(agent)?;
-    Some(crate::protocol::encode_event(&event))
 }
 
 /// Build a names-only copy of an `AvailableModelsUpdated` event by dropping the
