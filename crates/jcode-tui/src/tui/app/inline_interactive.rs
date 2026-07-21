@@ -87,9 +87,9 @@ fn route_supports_reasoning_effort(api_method: &str) -> bool {
         | Method::AnthropicApiKey
         | Method::OpenAIOAuth
         | Method::OpenAIApiKey
-        | Method::OpenRouter => true,
+        | Method::OpenRouter
+        | Method::OpenAiCompatible { .. } => true,
         Method::JcodeSubscription
-        | Method::OpenAiCompatible { .. }
         | Method::Copilot
         | Method::Cursor
         | Method::Bedrock
@@ -3866,7 +3866,7 @@ mod tests {
         assert!(!route_supports_reasoning_effort("copilot"));
         assert!(!route_supports_reasoning_effort("bedrock"));
         assert!(!route_supports_reasoning_effort("https"));
-        assert!(!route_supports_reasoning_effort(
+        assert!(route_supports_reasoning_effort(
             "openai-compatible:llamacpp"
         ));
         assert!(!route_supports_reasoning_effort("remote-catalog"));
