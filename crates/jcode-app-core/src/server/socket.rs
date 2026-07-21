@@ -310,16 +310,6 @@ pub async fn spawn_server_notify(cmd: &mut std::process::Command) -> Result<std:
         }
     }
 
-    if let Some(mut stderr) = child.stderr.take() {
-        // The shared daemon outlives the spawning client. Keep draining the
-        // stderr pipe after startup so later reloads cannot die on SIGPIPE
-        // when they emit provider/model selection notices during boot.
-        std::thread::spawn(move || {
-            let mut sink = std::io::sink();
-            let _ = std::io::copy(&mut stderr, &mut sink);
-        });
-    }
-
     Ok(child)
 }
 
@@ -420,14 +410,18 @@ pub(super) async fn handle_server_start_exit(
     status: std::process::ExitStatus,
 ) -> Result<()> {
     let stderr_output = take_server_start_stderr(child);
-    if server_start_matches_existing_server(&stderr_output) {
-        let socket_path = socket_path();
-        if wait_for_existing_server(&socket_path, Duration::from_secs(5)).await {
-            crate::logging::info(
-                "Server spawn raced with an existing daemon; treating startup as successful",
-            );
-            return Ok(());
-        }
+    // A Unix daemon's stderr is normally /dev/null so it cannot retain a pipe
+    // owned by the launching TUI. Probe the socket after any early child exit:
+    // if another launcher won the daemon lock and became ready, this startup
+    // still succeeded regardless of whether a diagnostic was captured.
+    let socket_path = socket_path();
+    if (stderr_output.is_empty() || server_start_matches_existing_server(&stderr_output))
+        && wait_for_existing_server(&socket_path, Duration::from_secs(5)).await
+    {
+        crate::logging::info(
+            "Server spawn raced with an existing daemon; treating startup as successful",
+        );
+        return Ok(());
     }
 
     anyhow::bail!(format_server_start_error(status, &stderr_output));

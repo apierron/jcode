@@ -1271,9 +1271,11 @@ pub(crate) async fn spawn_server(
     if let Some(model) = model {
         cmd.arg("--model").arg(model);
     }
-    cmd.arg("serve")
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped());
+    cmd.arg("serve").stdout(Stdio::null());
+    #[cfg(unix)]
+    cmd.stdin(Stdio::null()).stderr(Stdio::null());
+    #[cfg(not(unix))]
+    cmd.stderr(Stdio::piped());
 
     #[cfg(unix)]
     {
