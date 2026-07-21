@@ -3,11 +3,9 @@ use super::{
     process_remote_followups,
 };
 use crate::tool::selfdev::ReloadContext;
-use crate::tui::app::PendingReloadReconnectStatus;
+use crate::tui::app::{EventStream, PendingReloadReconnectStatus};
 use crate::tui::backend::{RemoteConnection, RemoteDisconnectReason};
 use anyhow::Result;
-use crossterm::event::EventStream;
-use futures::StreamExt;
 use ratatui::DefaultTerminal;
 use std::time::{Duration, Instant};
 use tokio::time::MissedTickBehavior;

@@ -21,8 +21,7 @@ use crate::tool::{Registry, ToolContext};
 use anyhow::Result;
 use auth::PendingLogin;
 use crossterm::event::{
-    Event, EventStream, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
-    MouseEventKind,
+    Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 use debug::DebugTrace;
 use futures::StreamExt;
@@ -95,6 +94,7 @@ mod state_ui_runtime;
 mod state_ui_storage;
 mod support;
 mod swarm_hint;
+mod terminal_events;
 mod terminal_liveness;
 mod todos_view;
 mod tui_lifecycle;
@@ -106,6 +106,7 @@ mod turn_notify;
 mod ui_prefs;
 
 pub(crate) use self::state_ui_storage::compact_display_messages_for_storage;
+use terminal_events::EventStream;
 
 pub(crate) fn extract_input_shell_command(input: &str) -> Option<&str> {
     self::input::extract_input_shell_command(input)

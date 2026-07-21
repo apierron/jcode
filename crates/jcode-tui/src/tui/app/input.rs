@@ -1,8 +1,8 @@
 #![cfg_attr(test, allow(clippy::items_after_test_module))]
 
 use super::{
-    App, ContentBlock, DisplayMessage, Message, ProcessingStatus, Role, SendAction, SkillRegistry,
-    commands, ctrl_bracket_fallback_to_esc, is_context_limit_error,
+    App, ContentBlock, DisplayMessage, EventStream, Message, ProcessingStatus, Role, SendAction,
+    SkillRegistry, commands, ctrl_bracket_fallback_to_esc, is_context_limit_error,
     is_request_payload_too_large_error, remote,
 };
 use crate::bus::{
@@ -12,7 +12,7 @@ use crate::bus::{
 use crate::util::truncate_str;
 use anyhow::Result;
 use base64::Engine;
-use crossterm::event::{EventStream, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::DefaultTerminal;
 use std::path::PathBuf;
 use std::process::Stdio;

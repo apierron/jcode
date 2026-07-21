@@ -1,4 +1,4 @@
-use super::{App, DisplayMessage, ProcessingStatus, is_context_limit_error};
+use super::{App, DisplayMessage, EventStream, ProcessingStatus, is_context_limit_error};
 use crate::bus::{
     BackgroundTaskCompleted, BackgroundTaskProgressEvent, BusEvent, InputShellCompleted,
     ManualToolCompleted, UiActivity, UiActivityKind,
@@ -9,7 +9,7 @@ use crate::message::{
 };
 use crate::session::StoredDisplayRole;
 use anyhow::Result;
-use crossterm::event::{Event, EventStream, KeyEventKind};
+use crossterm::event::{Event, KeyEventKind};
 use ratatui::DefaultTerminal;
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast::Receiver;
@@ -128,17 +128,20 @@ pub(super) fn handle_terminal_event(
     terminal: &mut DefaultTerminal,
     event: Option<std::result::Result<Event, std::io::Error>>,
 ) -> Result<bool> {
-    let mut needs_redraw = apply_terminal_event(app, terminal, event)?;
-    const MAX_DRAINED_EVENTS_PER_WAKE: usize = 32;
-    for _ in 0..MAX_DRAINED_EVENTS_PER_WAKE {
-        if !crossterm::event::poll(std::time::Duration::ZERO).unwrap_or(false) {
-            break;
-        }
-        if let Ok(event) = crossterm::event::read() {
-            needs_redraw |= apply_terminal_event(app, terminal, Some(Ok(event)))?;
-        }
+    // `EventStream` is the sole terminal reader. Crossterm requires choosing
+    // either its async stream or synchronous `poll`/`read`; mixing them can
+    // split an SGR mouse packet and surface its tail as typed text.
+    apply_terminal_event(app, terminal, event)
+}
+
+#[cfg(test)]
+#[test]
+fn async_terminal_input_has_no_synchronous_reader() {
+    let source = include_str!("local.rs");
+    for suffix in ["poll(", "read()"] {
+        let forbidden = ["crossterm::event::", suffix].concat();
+        assert!(!source.contains(&forbidden), "found {forbidden}");
     }
-    Ok(needs_redraw)
 }
 
 pub(super) fn handle_bus_event(
