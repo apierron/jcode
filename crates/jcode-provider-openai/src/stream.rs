@@ -784,9 +784,16 @@ impl OpenAIResponsesStream {
             return Some(event);
         }
 
-        while let Some(pos) = self.buffer.find("\n\n") {
+        while let Some((pos, separator_len)) = self
+            .buffer
+            .find("\n\n")
+            .map(|pos| (pos, 2))
+            .into_iter()
+            .chain(self.buffer.find("\r\n\r\n").map(|pos| (pos, 4)))
+            .min_by_key(|(pos, _)| *pos)
+        {
             let event_str = self.buffer[..pos].to_string();
-            self.buffer = self.buffer[pos + 2..].to_string();
+            self.buffer = self.buffer[pos + separator_len..].to_string();
 
             let mut data_lines = Vec::new();
             for line in event_str.lines() {

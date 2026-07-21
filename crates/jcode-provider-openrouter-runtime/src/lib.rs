@@ -949,6 +949,7 @@ pub struct OpenRouterProvider {
     model: Arc<RwLock<String>>,
     reasoning_effort: Arc<RwLock<Option<String>>>,
     api_base: String,
+    use_responses_api: bool,
     auth: ProviderAuth,
     supports_provider_features: bool,
     supports_model_catalog: bool,
@@ -1410,6 +1411,22 @@ impl OpenRouterProvider {
                 Some((id.to_ascii_lowercase(), supports_images))
             })
             .collect::<HashMap<_, _>>();
+        let use_responses_api = if matches!(
+            profile.provider_type,
+            jcode_base::config::NamedProviderType::OpenAiCompatible
+        ) {
+            match profile.api.as_deref() {
+                None | Some("chat-completions") => false,
+                Some("responses") => true,
+                Some(api) => anyhow::bail!(
+                    "Unsupported API '{}' for provider '{}'; expected chat-completions or responses",
+                    api,
+                    profile_name
+                ),
+            }
+        } else {
+            false
+        };
         Ok(Self {
             client: jcode_provider_core::shared_http_client(),
             model: Arc::new(RwLock::new(model)),
@@ -1418,6 +1435,7 @@ impl OpenRouterProvider {
                 Some(profile_name),
             ))),
             api_base,
+            use_responses_api,
             auth,
             supports_provider_features: matches!(
                 profile.provider_type,
@@ -1627,6 +1645,7 @@ impl OpenRouterProvider {
                 profile_id.as_deref(),
             ))),
             api_base,
+            use_responses_api: false,
             auth,
             supports_provider_features,
             supports_model_catalog,
@@ -1665,6 +1684,7 @@ impl OpenRouterProvider {
             model: Arc::new(RwLock::new(DEFAULT_MODEL.to_string())),
             reasoning_effort: Arc::new(RwLock::new(None)),
             api_base: DEFAULT_API_BASE.to_string(),
+            use_responses_api: false,
             auth: ProviderAuth::AuthorizationBearer {
                 token: api_key,
                 label: DEFAULT_API_KEY_NAME.to_string(),
@@ -1737,6 +1757,7 @@ impl OpenRouterProvider {
                 Some(&resolved.id),
             ))),
             api_base,
+            use_responses_api: false,
             auth,
             supports_provider_features: false,
             supports_model_catalog: true,
@@ -1961,6 +1982,7 @@ impl OpenRouterProvider {
                 model: Arc::new(RwLock::new(model_name.clone())),
                 reasoning_effort: Arc::new(RwLock::new(None)),
                 api_base,
+                use_responses_api: false,
                 auth,
                 supports_provider_features: true,
                 supports_model_catalog: true,

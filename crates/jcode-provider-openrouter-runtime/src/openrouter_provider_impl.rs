@@ -2,6 +2,98 @@ use super::openrouter_sse_stream::run_stream_with_retries;
 use super::*;
 use jcode_base::provider::{ModelCatalogRefreshSummary, summarize_model_catalog_refresh};
 
+impl OpenRouterProvider {
+    async fn complete_responses(
+        &self,
+        messages: &[Message],
+        tools: &[ToolDefinition],
+        system: &str,
+    ) -> Result<EventStream> {
+        let model = self.model.read().await.clone();
+        let filtered_messages = (!self.supports_image_input()
+            && messages
+                .iter()
+                .flat_map(|message| &message.content)
+                .any(|block| matches!(block, ContentBlock::Image { .. })))
+        .then(|| {
+            let mut messages = messages.to_vec();
+            for block in messages.iter_mut().flat_map(|message| &mut message.content) {
+                if let ContentBlock::Image { media_type, .. } = block {
+                    *block = ContentBlock::Text {
+                        text: format!(
+                            "[Image omitted: this provider/model does not support image input; media_type={media_type}]"
+                        ),
+                        cache_control: None,
+                    };
+                }
+            }
+            messages
+        });
+        let messages = filtered_messages.as_deref().unwrap_or(messages);
+        let input = jcode_base::provider::openai_request::build_responses_input(messages);
+        let api_tools = jcode_base::provider::openai_request::build_tools(tools);
+        let mut request = serde_json::json!({
+            "model": model,
+            "instructions": system,
+            "input": input,
+            "tools": api_tools,
+            "tool_choice": "auto",
+            "parallel_tool_calls": false,
+            "stream": true,
+            "store": false,
+            "include": ["reasoning.encrypted_content"],
+        });
+
+        if let Some(max_tokens) = self.max_tokens {
+            request["max_output_tokens"] = serde_json::json!(max_tokens);
+        }
+        if let Some(effort) = self.reasoning_effort() {
+            let effort = if jcode_base::prompt::is_swarm_effort(&effort) {
+                "max"
+            } else {
+                effort.as_str()
+            };
+            request["reasoning"] = serde_json::json!({ "effort": effort });
+        }
+        Ok(self.start_stream(request, model))
+    }
+
+    fn start_stream(&self, request: Value, model: String) -> EventStream {
+        let (tx, rx) = mpsc::channel::<Result<StreamEvent>>(100);
+        let client = self.client.clone();
+        let api_base = self.api_base.clone();
+        let auth = self.auth.clone();
+        let send_openrouter_headers = self.send_openrouter_headers;
+        let provider_pin = Arc::clone(&self.provider_pin);
+        let use_responses_api = self.use_responses_api;
+        tokio::spawn(async move {
+            if tx
+                .send(Ok(StreamEvent::ConnectionType {
+                    connection: "https/sse".to_string(),
+                }))
+                .await
+                .is_err()
+            {
+                return;
+            }
+            run_stream_with_retries(
+                client,
+                api_base,
+                auth,
+                send_openrouter_headers,
+                request,
+                tx,
+                provider_pin,
+                model,
+                use_responses_api,
+            )
+            .await;
+        });
+
+        Box::pin(ReceiverStream::new(rx))
+    }
+}
+
 #[async_trait]
 impl Provider for OpenRouterProvider {
     fn runtime_display_name(&self) -> String {
@@ -41,6 +133,10 @@ impl Provider for OpenRouterProvider {
         system: &str,
         _resume_session_id: Option<&str>,
     ) -> Result<EventStream> {
+        if self.use_responses_api {
+            return self.complete_responses(messages, tools, system).await;
+        }
+
         let model = self.model.read().await.clone();
         let reasoning_effort = self.reasoning_effort();
         let thinking_override = Self::thinking_override();
@@ -280,39 +376,7 @@ impl Provider for OpenRouterProvider {
         // OpenRouter uses HTTPS/SSE transport only
         jcode_base::logging::info("OpenRouter transport: HTTPS (SSE)");
 
-        let (tx, rx) = mpsc::channel::<Result<StreamEvent>>(100);
-        let client = self.client.clone();
-        let api_base = self.api_base.clone();
-        let auth = self.auth.clone();
-        let send_openrouter_headers = self.send_openrouter_headers;
-        let request_for_retries = request;
-        let model_for_stream = model.clone();
-        let provider_pin = Arc::clone(&self.provider_pin);
-
-        tokio::spawn(async move {
-            if tx
-                .send(Ok(StreamEvent::ConnectionType {
-                    connection: "https/sse".to_string(),
-                }))
-                .await
-                .is_err()
-            {
-                return;
-            }
-            run_stream_with_retries(
-                client,
-                api_base,
-                auth,
-                send_openrouter_headers,
-                request_for_retries,
-                tx,
-                provider_pin,
-                model_for_stream,
-            )
-            .await;
-        });
-
-        Ok(Box::pin(ReceiverStream::new(rx)))
+        Ok(self.start_stream(request, model))
     }
 
     fn name(&self) -> &str {
@@ -745,6 +809,7 @@ impl Provider for OpenRouterProvider {
             )),
             reasoning_effort: Arc::new(RwLock::new(self.reasoning_effort())),
             api_base: self.api_base.clone(),
+            use_responses_api: self.use_responses_api,
             auth: self.auth.clone(),
             supports_provider_features: self.supports_provider_features,
             supports_model_catalog: self.supports_model_catalog,

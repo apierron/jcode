@@ -96,6 +96,16 @@ pub fn error_with_retry_after(message: String, retry_after: Option<RetryAfter>) 
     }
 }
 
+/// Build an error from a provider's structured retry delay, applying the same
+/// upper bound as an HTTP `Retry-After` header.
+pub fn error_with_retry_after_secs(message: String, retry_after_secs: Option<u64>) -> Error {
+    error_with_retry_after(
+        message,
+        retry_after_secs
+            .map(|seconds| RetryAfter::new(Duration::from_secs(seconds).min(MAX_RETRY_AFTER))),
+    )
+}
+
 /// Recover a server retry hint from a provider error, including through anyhow
 /// context layers.
 pub fn retry_after_from_error(error: &Error) -> Option<Duration> {
@@ -198,6 +208,14 @@ mod tests {
         let remaining = retry_after_from_error(&error).unwrap();
         assert!(remaining <= Duration::from_secs(9));
         assert!(remaining > Duration::from_secs(8));
+    }
+
+    #[test]
+    fn structured_error_hint_is_capped() {
+        let error = error_with_retry_after_secs("rate limited".to_string(), Some(u64::MAX));
+        let remaining = retry_after_from_error(&error).unwrap();
+        assert!(remaining <= MAX_RETRY_AFTER);
+        assert!(remaining > MAX_RETRY_AFTER - Duration::from_secs(1));
     }
 
     #[test]

@@ -1094,6 +1094,7 @@ fn make_provider() -> OpenRouterProvider {
         model: Arc::new(RwLock::new(DEFAULT_MODEL.to_string())),
         reasoning_effort: Arc::new(RwLock::new(None)),
         api_base: DEFAULT_API_BASE.to_string(),
+        use_responses_api: false,
         auth: ProviderAuth::AuthorizationBearer {
             token: "test".to_string(),
             label: DEFAULT_API_KEY_NAME.to_string(),
@@ -1123,6 +1124,7 @@ fn make_custom_compatible_provider() -> OpenRouterProvider {
         model: Arc::new(RwLock::new(DEFAULT_MODEL.to_string())),
         reasoning_effort: Arc::new(RwLock::new(None)),
         api_base: "https://compat.example.test/v1".to_string(),
+        use_responses_api: false,
         auth: ProviderAuth::AuthorizationBearer {
             token: "test".to_string(),
             label: "OPENAI_COMPAT_API_KEY".to_string(),
@@ -1175,6 +1177,10 @@ fn spawn_single_response_models_server(body: &'static str) -> (String, mpsc::Rec
 }
 
 fn spawn_single_response_chat_server() -> (String, mpsc::Receiver<String>) {
+    spawn_single_response_stream_server("data: [DONE]\n\n")
+}
+
+fn spawn_single_response_stream_server(body: &'static str) -> (String, mpsc::Receiver<String>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind fake provider server");
     let addr = listener.local_addr().expect("fake provider addr");
     let (request_tx, request_rx) = mpsc::channel();
@@ -1189,7 +1195,6 @@ fn spawn_single_response_chat_server() -> (String, mpsc::Receiver<String>) {
         let request = String::from_utf8_lossy(&request[..n]).into_owned();
         let _ = request_tx.send(request);
 
-        let body = "data: [DONE]\n\n";
         let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             body.len(),
@@ -1560,6 +1565,163 @@ fn direct_openai_compatible_chat_request_preserves_max_reasoning_effort() {
         request.contains(r#""reasoning_effort":"max""#),
         "direct compatible request must preserve OpenAI max: {request}"
     );
+}
+
+#[test]
+fn named_profile_api_selects_chat_or_responses_wire_format() {
+    let _lock = ENV_LOCK.lock();
+    let _key = EnvVarGuard::set("TEST_NAMED_RESPONSES_KEY", "test-key");
+
+    let capture_request = |api: Option<&str>, body: &'static str| {
+        let (api_base, request_rx) = spawn_single_response_stream_server(body);
+        let expected_route = (
+            "test".to_string(),
+            "openai-compatible:test".to_string(),
+            api_base.clone(),
+        );
+        let config = jcode_base::config::NamedProviderConfig {
+            base_url: api_base,
+            api: api.map(str::to_string),
+            api_key_env: Some("TEST_NAMED_RESPONSES_KEY".to_string()),
+            default_model: Some("default-model".to_string()),
+            models: vec![jcode_base::config::NamedProviderModelConfig {
+                id: "gpt-5.6-restored".to_string(),
+                input: vec!["text".to_string()],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let provider = OpenRouterProvider::new_named_openai_compatible("test", &config)
+            .expect("named provider");
+        assert_eq!(
+            provider.direct_openai_compatible_route_parts(),
+            Some(expected_route.clone())
+        );
+        let provider = provider.fork();
+        assert_eq!(
+            provider.direct_openai_compatible_route_parts(),
+            Some(expected_route)
+        );
+        if api == Some("responses") {
+            provider
+                .set_model("test:gpt-5.6-restored")
+                .expect("restored profile-qualified model should switch");
+            provider
+                .set_reasoning_effort("max")
+                .expect("Responses profile should accept native max effort");
+        }
+        let messages = vec![Message {
+            role: Role::User,
+            content: vec![
+                ContentBlock::Text {
+                    text: "hello".to_string(),
+                    cache_control: None,
+                },
+                ContentBlock::Image {
+                    media_type: "image/png".to_string(),
+                    data: "aW1hZ2U=".to_string(),
+                },
+            ],
+            timestamp: None,
+            tool_duration_ms: None,
+        }];
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let events = rt.block_on(async {
+            let tools = [ToolDefinition {
+                name: "lookup".to_string(),
+                description: "Look something up".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"]
+                }),
+            }];
+            let mut stream = provider
+                .complete(&messages, &tools, "be concise", None)
+                .await
+                .expect("request should start");
+            let mut events = Vec::new();
+            while let Some(event) = stream.next().await {
+                events.push(event);
+            }
+            events
+        });
+
+        (
+            request_rx
+                .recv_timeout(Duration::from_secs(2))
+                .expect("capture provider request"),
+            events,
+        )
+    };
+
+    let (chat_request, chat_events) = capture_request(None, "data: [DONE]\n\n");
+    assert!(chat_request.starts_with("POST /v1/chat/completions "));
+    assert!(chat_request.contains(r#""messages":"#));
+    assert!(chat_events.iter().all(Result::is_ok));
+    assert!(
+        capture_request(Some("chat-completions"), "data: [DONE]\n\n")
+            .0
+            .starts_with("POST /v1/chat/completions ")
+    );
+
+    let completed_responses = concat!(
+        "data: {\"type\":\"response.reasoning.delta\",\"delta\":\"thought\"}\r\n\r\n",
+        "data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\r\n\r\n",
+        "data: {\"type\":\"response.function_call_arguments.done\",\"item_id\":\"item_1\",\"call_id\":\"call_1\",\"name\":\"lookup\",\"arguments\":\"{\\\"query\\\":\\\"x\\\"}\"}\r\n\r\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\r\n\r\n"
+    );
+    let (responses_request, responses_results) =
+        capture_request(Some("responses"), completed_responses);
+    let responses_events: Vec<_> = responses_results
+        .into_iter()
+        .collect::<Result<_, _>>()
+        .expect("completed Responses stream should succeed");
+    assert!(responses_request.starts_with("POST /v1/responses "));
+    assert!(
+        responses_request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer test-key")
+    );
+    assert!(responses_request.contains(r#""model":"gpt-5.6-restored""#));
+    assert!(responses_request.contains(r#""input":"#));
+    assert!(responses_request.contains(r#""instructions":"be concise""#));
+    assert!(responses_request.contains(r#""name":"lookup""#));
+    assert!(responses_request.contains(r#""reasoning":{"effort":"max"}"#));
+    assert!(responses_request.contains(r#""include":["reasoning.encrypted_content"]"#));
+    assert!(!responses_request.contains(r#""messages":"#));
+    assert!(!responses_request.contains("reasoning_effort"));
+    assert!(!responses_request.contains(r#""type":"input_image""#));
+    assert!(responses_request.contains("Image omitted"));
+    assert!(
+        responses_events
+            .iter()
+            .any(|event| matches!(event, StreamEvent::TextDelta(text) if text == "ok"))
+    );
+    assert!(
+        responses_events
+            .iter()
+            .any(|event| matches!(event, StreamEvent::ThinkingDelta(text) if text == "thought"))
+    );
+    assert!(responses_events.iter().any(
+        |event| matches!(event, StreamEvent::ToolUseStart { id, name } if id == "call_1" && name == "lookup")
+    ));
+    assert!(
+        responses_events
+            .iter()
+            .any(|event| matches!(event, StreamEvent::MessageEnd { .. }))
+    );
+
+    let invalid = jcode_base::config::NamedProviderConfig {
+        base_url: "https://example.com/v1".to_string(),
+        api: Some("unknown".to_string()),
+        auth: jcode_base::config::NamedProviderAuth::None,
+        ..Default::default()
+    };
+    assert!(OpenRouterProvider::new_named_openai_compatible("test", &invalid).is_err());
 }
 
 #[test]
@@ -2659,6 +2821,7 @@ fn midstream_transport_fault_emits_retry_rollback_before_replay() {
             tx,
             Arc::new(Mutex::new(None)),
             "test-model".to_string(),
+            false,
         )
         .await;
 

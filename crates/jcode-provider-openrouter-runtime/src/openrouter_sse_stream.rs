@@ -1,5 +1,43 @@
 use super::*;
+use futures::Stream;
+use jcode_provider_openai::stream::OpenAIResponsesStream;
 use jcode_provider_openrouter::stream::OpenRouterStream;
+use std::pin::Pin;
+
+fn responses_error_is_retryable(message: &str, retry_after_secs: Option<u64>) -> bool {
+    let metadata = message
+        .split_once(':')
+        .map_or(message, |(metadata, _)| metadata);
+    let metadata = metadata.to_ascii_lowercase();
+    if [
+        "invalid_request",
+        "authentication",
+        "permission",
+        "not_found",
+        "billing",
+        "insufficient_quota",
+        "unprocessable",
+        "bad_request",
+    ]
+    .iter()
+    .any(|marker| metadata.contains(marker))
+    {
+        return false;
+    }
+    if [
+        "rate_limit",
+        "server_error",
+        "api_error",
+        "overloaded",
+        "internal_error",
+    ]
+    .iter()
+    .any(|marker| metadata.contains(marker))
+    {
+        return true;
+    }
+    retry_after_secs.is_some()
+}
 
 fn local_endpoint_troubleshooting_hint(api_base: &str, model: &str) -> &'static str {
     let lower = api_base.to_ascii_lowercase();
@@ -36,6 +74,7 @@ pub(super) async fn run_stream_with_retries(
     tx: mpsc::Sender<Result<StreamEvent>>,
     provider_pin: Arc<Mutex<Option<ProviderPin>>>,
     model: String,
+    use_responses_api: bool,
 ) {
     let mut last_error = None;
     let mut next_retry_delay = None;
@@ -91,6 +130,7 @@ pub(super) async fn run_stream_with_retries(
             attempt_tx,
             Arc::clone(&provider_pin),
             model.clone(),
+            use_responses_api,
         )
         .await
         {
@@ -159,6 +199,7 @@ async fn stream_response(
     tx: mpsc::Sender<Result<StreamEvent>>,
     provider_pin: Arc<Mutex<Option<ProviderPin>>>,
     model: String,
+    use_responses_api: bool,
 ) -> Result<()> {
     use jcode_message_types::ConnectionPhase;
     let _ = tx
@@ -168,7 +209,12 @@ async fn stream_response(
         .await;
     let connect_start = std::time::Instant::now();
 
-    let url = format!("{}/chat/completions", api_base);
+    let (api_path, api_label) = if use_responses_api {
+        ("responses", "Responses")
+    } else {
+        ("chat/completions", "chat")
+    };
+    let url = format!("{}/{}", api_base, api_path);
     let mut req = apply_kimi_coding_agent_headers(
         auth.apply(
             client
@@ -194,7 +240,8 @@ async fn stream_response(
         .with_context(|| {
             let hint = local_endpoint_troubleshooting_hint(&api_base, &model);
             format!(
-                "Failed to send OpenAI-compatible chat request\n  endpoint: {}\n  model: {}\n  auth: {}\n{}",
+                "Failed to send OpenAI-compatible {} request\n  endpoint: {}\n  model: {}\n  auth: {}\n{}",
+                api_label,
                 url,
                 model,
                 auth.label(),
@@ -216,7 +263,8 @@ async fn stream_response(
         let hint = local_endpoint_troubleshooting_hint(&api_base, &model);
         return Err(jcode_provider_core::retry_after::error_with_retry_after(
             format!(
-                "OpenAI-compatible chat request failed\n  endpoint: {}\n  model: {}\n  auth: {}\n  status: {}\n  response: {}\n{}",
+                "OpenAI-compatible {} request failed\n  endpoint: {}\n  model: {}\n  auth: {}\n  status: {}\n  response: {}\n{}",
+                api_label,
                 url,
                 model,
                 auth.label(),
@@ -234,7 +282,15 @@ async fn stream_response(
         }))
         .await;
 
-    let mut stream = OpenRouterStream::new(response.bytes_stream(), model.clone(), provider_pin);
+    let mut stream: Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send>> = if use_responses_api {
+        Box::pin(OpenAIResponsesStream::new(response.bytes_stream()))
+    } else {
+        Box::pin(OpenRouterStream::new(
+            response.bytes_stream(),
+            model.clone(),
+            provider_pin,
+        ))
+    };
 
     // Idle timeout between streamed chunks. Configurable so slow reasoning
     // models (e.g. DeepSeek) that think silently for minutes before emitting
@@ -243,6 +299,7 @@ async fn stream_response(
     // defaulting to 180s. Shared with the native provider paths (issue #434).
     let sse_chunk_timeout = jcode_base::provider::stream_idle_timeout();
     let idle_timeout_secs = sse_chunk_timeout.as_secs();
+    let mut saw_message_end = false;
 
     loop {
         let event = match tokio::time::timeout(sse_chunk_timeout, stream.next()).await {
@@ -270,9 +327,35 @@ async fn stream_response(
                 );
             }
         };
+        if use_responses_api {
+            if matches!(event, StreamEvent::MessageEnd { .. }) {
+                saw_message_end = true;
+            }
+            if let StreamEvent::Error {
+                message,
+                retry_after_secs,
+            } = &event
+                && responses_error_is_retryable(message, *retry_after_secs)
+            {
+                return Err(
+                    jcode_provider_core::retry_after::error_with_retry_after_secs(
+                        format!("OpenAI-compatible Responses error: {message}"),
+                        *retry_after_secs,
+                    ),
+                );
+            }
+            if matches!(event, StreamEvent::Error { .. }) {
+                let _ = tx.send(Ok(event)).await;
+                return Ok(());
+            }
+        }
         if tx.send(Ok(event)).await.is_err() {
             return Ok(());
         }
+    }
+
+    if use_responses_api && !saw_message_end {
+        anyhow::bail!("OpenAI-compatible Responses stream EOF before message completion marker");
     }
 
     Ok(())
@@ -322,6 +405,23 @@ fn is_retryable_error(error_str: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn structured_responses_errors_override_message_heuristics() {
+        assert!(!responses_error_is_retryable(
+            "invalid_request_error: stream error rate_limit server_error",
+            None,
+        ));
+        assert!(!responses_error_is_retryable(
+            "invalid_request_error: try later",
+            Some(2),
+        ));
+        assert!(responses_error_is_retryable(
+            "server_error: invalid request",
+            None,
+        ));
+        assert!(responses_error_is_retryable("unknown: try later", Some(2)));
+    }
 
     #[test]
     fn local_endpoint_hint_mentions_ollama_actions() {
