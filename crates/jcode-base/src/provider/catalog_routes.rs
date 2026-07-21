@@ -515,10 +515,15 @@ fn named_provider_profile_routes(
     }
 
     let api_method = format!("openai-compatible:{}", profile_name);
-    let detail = if profile_config.base_url.trim().is_empty() {
+    let base_detail = if profile_config.base_url.trim().is_empty() {
         "configured provider profile".to_string()
     } else {
         profile_config.base_url.trim().to_string()
+    };
+    let detail = if profile_config.api == Some(crate::config::NamedProviderApi::Responses) {
+        format!("Responses API · {}", base_detail)
+    } else {
+        base_detail
     };
 
     let mut routes: Vec<ModelRoute> = Vec::new();

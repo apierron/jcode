@@ -47,7 +47,8 @@ pub use models::{
     provider_for_model_with_hint as core_provider_for_model_with_hint, provider_key_from_hint,
 };
 pub use reasoning::{
-    DEEPSEEK_SELECTABLE_EFFORTS, OPENAI_SELECTABLE_EFFORTS, OPENROUTER_SELECTABLE_EFFORTS,
+    DEEPSEEK_SELECTABLE_EFFORTS, OPENAI_COMPATIBLE_RESPONSES_SELECTABLE_EFFORTS,
+    OPENAI_COMPATIBLE_SELECTABLE_EFFORTS, OPENAI_SELECTABLE_EFFORTS, OPENROUTER_SELECTABLE_EFFORTS,
     canonical_reasoning_effort, inferred_reasoning_efforts,
 };
 pub use selection::{

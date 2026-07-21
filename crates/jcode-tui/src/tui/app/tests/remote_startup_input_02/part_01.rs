@@ -1726,6 +1726,14 @@ fn test_model_picker_effort_variants_follow_each_route_vocabulary() {
             cheapness: None,
         });
     }
+    app.remote_model_options.push(crate::provider::ModelRoute {
+        model: "gpt-5.6-terra".to_string(),
+        provider: "Azure Responses".to_string(),
+        api_method: "openai-compatible:azure-responses".to_string(),
+        available: true,
+        detail: "Responses API · https://example.openai.azure.com/openai/v1".to_string(),
+        cheapness: None,
+    });
 
     app.open_model_picker();
     let picker = app
@@ -1758,11 +1766,37 @@ fn test_model_picker_effort_variants_follow_each_route_vocabulary() {
     assert!(has_route_effort(
         "gpt-5.6-sol",
         "openai-compatible:custom-gateway",
-        "minimal"
+        "low"
     ));
     assert!(has_route_effort(
         "gpt-5.6-sol",
         "openai-compatible:custom-gateway",
+        "xhigh"
+    ));
+    assert!(
+        !has_route_effort(
+            "gpt-5.6-sol",
+            "openai-compatible:custom-gateway",
+            "minimal"
+        ),
+        "compatible Chat routes must not advertise minimal because GPT gateways can reject it"
+    );
+    assert!(
+        !has_route_effort(
+            "gpt-5.6-sol",
+            "openai-compatible:custom-gateway",
+            "max"
+        ),
+        "compatible Chat routes must not advertise max because Chat Completions can reject it"
+    );
+    assert!(!has_route_effort(
+        "gpt-5.6-terra",
+        "openai-compatible:azure-responses",
+        "minimal"
+    ));
+    assert!(has_route_effort(
+        "gpt-5.6-terra",
+        "openai-compatible:azure-responses",
         "max"
     ));
 

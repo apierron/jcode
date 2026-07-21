@@ -32,6 +32,38 @@ pub const OPENROUTER_SELECTABLE_EFFORTS: &[&str] = &[
     "swarm-deep",
 ];
 
+/// Portable effort levels for direct OpenAI-compatible GPT endpoints.
+///
+/// Azure OpenAI Chat Completions rejects both `minimal` and `max`, while native
+/// OpenAI, compatible Responses, and OpenRouter expose broader vocabularies.
+/// Keep the compatible Chat picker to the verified intersection. A runtime may
+/// still pass through an explicitly configured provider-specific value.
+pub const OPENAI_COMPATIBLE_SELECTABLE_EFFORTS: &[&str] = &[
+    "none",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "swarm",
+    "swarm-deep",
+];
+
+/// Portable effort levels for OpenAI-compatible Responses API endpoints.
+///
+/// Azure Responses accepts literal `max` for current GPT-5 reasoning models but
+/// rejects `minimal`, so this differs from both native OpenAI and compatible
+/// Chat Completions. Explicit provider-specific values can still be requested.
+pub const OPENAI_COMPATIBLE_RESPONSES_SELECTABLE_EFFORTS: &[&str] = &[
+    "none",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+    "swarm",
+    "swarm-deep",
+];
+
 /// Direct DeepSeek effort levels, followed by Jcode's swarm modes.
 pub const DEEPSEEK_SELECTABLE_EFFORTS: &[&str] = &[
     "none",
@@ -66,6 +98,15 @@ pub fn inferred_reasoning_efforts(
 ) -> Vec<&'static str> {
     let provider = provider_name.unwrap_or_default().to_ascii_lowercase();
     let model = model_name.unwrap_or_default().to_ascii_lowercase();
+    let is_openai_model = model.starts_with("gpt-")
+        || model.starts_with("o1")
+        || model.starts_with("o3")
+        || model.starts_with("o4")
+        || model.starts_with("o5");
+
+    if provider.contains("responses") && is_openai_model {
+        return OPENAI_COMPATIBLE_RESPONSES_SELECTABLE_EFFORTS.to_vec();
+    }
 
     if provider.contains("openrouter") {
         return OPENROUTER_SELECTABLE_EFFORTS.to_vec();
@@ -75,14 +116,12 @@ pub fn inferred_reasoning_efforts(
         return DEEPSEEK_SELECTABLE_EFFORTS.to_vec();
     }
 
-    let is_openai_model = model.starts_with("gpt-")
-        || model.starts_with("o1")
-        || model.starts_with("o3")
-        || model.starts_with("o4")
-        || model.starts_with("o5");
     if provider.contains("openai-compatible") {
         return if is_openai_model {
-            OPENAI_SELECTABLE_EFFORTS.to_vec()
+            // Azure and other compatible GPT gateways commonly expose the
+            // portable none|low|medium|high|xhigh vocabulary. Keep broader
+            // native values available only through explicit configuration.
+            OPENAI_COMPATIBLE_SELECTABLE_EFFORTS.to_vec()
         } else {
             Vec::new()
         };
@@ -120,7 +159,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn provider_ladders_preserve_distinct_max_semantics() {
+    fn provider_ladders_preserve_native_max_and_portable_compatible_semantics() {
         assert_eq!(
             inferred_reasoning_efforts(Some("openai"), Some("gpt-5.4")),
             OPENAI_SELECTABLE_EFFORTS
@@ -129,12 +168,24 @@ mod tests {
         assert!(OPENAI_SELECTABLE_EFFORTS.contains(&"minimal"));
         assert!(OPENROUTER_SELECTABLE_EFFORTS.contains(&"minimal"));
         assert!(!OPENROUTER_SELECTABLE_EFFORTS.contains(&"max"));
+        assert!(!OPENAI_COMPATIBLE_SELECTABLE_EFFORTS.contains(&"minimal"));
+        assert!(!OPENAI_COMPATIBLE_SELECTABLE_EFFORTS.contains(&"max"));
         assert!(DEEPSEEK_SELECTABLE_EFFORTS.contains(&"max"));
         assert_eq!(
             inferred_reasoning_efforts(Some("openai-compatible:custom"), Some("gpt-5.6")),
-            OPENAI_SELECTABLE_EFFORTS,
-            "direct OpenAI-compatible runtimes use the OpenAI reasoning_effort vocabulary"
+            OPENAI_COMPATIBLE_SELECTABLE_EFFORTS,
+            "compatible runtimes should advertise only the portable vocabulary"
         );
+        assert_eq!(
+            inferred_reasoning_efforts(
+                Some("openai-compatible:custom responses api"),
+                Some("gpt-5.6")
+            ),
+            OPENAI_COMPATIBLE_RESPONSES_SELECTABLE_EFFORTS,
+            "Responses-compatible runtimes should advertise the portable Responses efforts"
+        );
+        assert!(!OPENAI_COMPATIBLE_RESPONSES_SELECTABLE_EFFORTS.contains(&"minimal"));
+        assert!(OPENAI_COMPATIBLE_RESPONSES_SELECTABLE_EFFORTS.contains(&"max"));
     }
 
     #[test]

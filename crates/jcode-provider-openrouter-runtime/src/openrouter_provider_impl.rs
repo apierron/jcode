@@ -2,6 +2,112 @@ use super::openrouter_sse_stream::run_stream_with_retries;
 use super::*;
 use jcode_base::provider::{ModelCatalogRefreshSummary, summarize_model_catalog_refresh};
 
+impl OpenRouterProvider {
+    async fn complete_responses(
+        &self,
+        messages: &[Message],
+        tools: &[ToolDefinition],
+        system: &str,
+    ) -> Result<EventStream> {
+        let model = self.model.read().await.clone();
+        let input = jcode_provider_openai::build_responses_input(messages);
+        let api_tools = jcode_provider_openai::build_tools(tools);
+        let mut request = serde_json::json!({
+            "model": model,
+            "instructions": system,
+            "input": input,
+            "stream": true,
+            "store": false,
+        });
+
+        if !api_tools.is_empty() {
+            request["tools"] = serde_json::json!(api_tools);
+            request["tool_choice"] = serde_json::json!("auto");
+            request["parallel_tool_calls"] = serde_json::json!(false);
+        }
+        if let Some(max_tokens) = self.max_tokens {
+            request["max_output_tokens"] = serde_json::json!(max_tokens);
+        }
+        if let Some(effort) = self.reasoning_effort() {
+            let effort = if jcode_base::prompt::is_swarm_effort(&effort) {
+                "max"
+            } else {
+                effort.as_str()
+            };
+            request["reasoning"] = serde_json::json!({ "effort": effort });
+        }
+        if let Some(extra) = self.extra_body.as_ref()
+            && let Some(request_obj) = request.as_object_mut()
+        {
+            for (key, value) in extra {
+                request_obj.insert(key.clone(), value.clone());
+            }
+        }
+
+        let input_items = request
+            .get("input")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let tools_value = request.get("tools").cloned();
+        let instructions = request.get("instructions").cloned();
+        let tool_count = tools_value
+            .as_ref()
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .unwrap_or(0);
+        jcode_provider_core::fingerprint::log_provider_canonical_input(
+            "openai-compatible",
+            &model,
+            "openai_responses",
+            &request,
+            &input_items,
+            instructions.as_ref(),
+            tools_value.as_ref(),
+            Some(tool_count),
+            &[("wire_api", "responses".to_string())],
+        );
+
+        Ok(self.start_compatible_stream(request, model))
+    }
+
+    fn start_compatible_stream(&self, request: Value, model: String) -> EventStream {
+        let (tx, rx) = mpsc::channel::<Result<StreamEvent>>(100);
+        let client = self.client.clone();
+        let api_base = self.api_base.clone();
+        let auth = self.auth.clone();
+        let send_openrouter_headers = self.send_openrouter_headers;
+        let provider_pin = Arc::clone(&self.provider_pin);
+        let wire_api = self.wire_api;
+
+        tokio::spawn(async move {
+            if tx
+                .send(Ok(StreamEvent::ConnectionType {
+                    connection: "https/sse".to_string(),
+                }))
+                .await
+                .is_err()
+            {
+                return;
+            }
+            run_stream_with_retries(
+                client,
+                api_base,
+                auth,
+                send_openrouter_headers,
+                request,
+                tx,
+                provider_pin,
+                model,
+                wire_api,
+            )
+            .await;
+        });
+
+        Box::pin(ReceiverStream::new(rx))
+    }
+}
+
 #[async_trait]
 impl Provider for OpenRouterProvider {
     fn runtime_display_name(&self) -> String {
@@ -41,6 +147,10 @@ impl Provider for OpenRouterProvider {
         system: &str,
         _resume_session_id: Option<&str>,
     ) -> Result<EventStream> {
+        if self.wire_api == jcode_base::config::NamedProviderApi::Responses {
+            return self.complete_responses(messages, tools, system).await;
+        }
+
         let model = self.model.read().await.clone();
         let reasoning_effort = self.reasoning_effort();
         let thinking_override = Self::thinking_override();
@@ -117,6 +227,7 @@ impl Provider for OpenRouterProvider {
             "model": model,
             "messages": api_messages,
             "stream": true,
+            "stream_options": { "include_usage": true },
         });
 
         if let Some(max_tokens) = self.max_tokens {
@@ -141,7 +252,10 @@ impl Provider for OpenRouterProvider {
                 // Zen serving gpt-5.3-codex-spark) take the standard OpenAI
                 // `reasoning_effort` field with OpenAI's effort vocabulary.
                 let effort = if jcode_base::prompt::is_swarm_effort(effort) {
-                    "max"
+                    // `max` is not portable across compatible GPT gateways
+                    // (Azure tops out at `xhigh`). Explicit max remains intact
+                    // for endpoints that support it.
+                    "xhigh"
                 } else {
                     effort
                 };
@@ -280,39 +394,7 @@ impl Provider for OpenRouterProvider {
         // OpenRouter uses HTTPS/SSE transport only
         jcode_base::logging::info("OpenRouter transport: HTTPS (SSE)");
 
-        let (tx, rx) = mpsc::channel::<Result<StreamEvent>>(100);
-        let client = self.client.clone();
-        let api_base = self.api_base.clone();
-        let auth = self.auth.clone();
-        let send_openrouter_headers = self.send_openrouter_headers;
-        let request_for_retries = request;
-        let model_for_stream = model.clone();
-        let provider_pin = Arc::clone(&self.provider_pin);
-
-        tokio::spawn(async move {
-            if tx
-                .send(Ok(StreamEvent::ConnectionType {
-                    connection: "https/sse".to_string(),
-                }))
-                .await
-                .is_err()
-            {
-                return;
-            }
-            run_stream_with_retries(
-                client,
-                api_base,
-                auth,
-                send_openrouter_headers,
-                request_for_retries,
-                tx,
-                provider_pin,
-                model_for_stream,
-            )
-            .await;
-        });
-
-        Ok(Box::pin(ReceiverStream::new(rx)))
+        Ok(self.start_compatible_stream(request, model))
     }
 
     fn name(&self) -> &str {
@@ -447,10 +529,15 @@ impl Provider for OpenRouterProvider {
         }
         let requested = effort.trim().to_ascii_lowercase();
         let mut accepted = self.available_efforts().contains(&requested.as_str());
-        if !self.supports_deepseek_reasoning_effort()
-            && !self.supports_openai_reasoning_effort()
-            && requested == "max"
+        if self.supports_openai_reasoning_effort()
+            && matches!(requested.as_str(), "minimal" | "max")
         {
+            // Direct compatible pickers expose only the portable Azure-safe
+            // subset, but endpoints with a broader vocabulary can still opt in
+            // through config or an explicit command.
+            accepted = true;
+        } else if !self.supports_deepseek_reasoning_effort() && requested == "max" {
+            // OpenRouter accepts max as an alias for xhigh.
             accepted = true;
         }
         if !requested.is_empty() && !accepted {
@@ -472,7 +559,11 @@ impl Provider for OpenRouterProvider {
         if self.supports_deepseek_reasoning_effort() {
             jcode_provider_core::DEEPSEEK_SELECTABLE_EFFORTS.to_vec()
         } else if self.supports_openai_reasoning_effort() {
-            jcode_provider_core::OPENAI_SELECTABLE_EFFORTS.to_vec()
+            if self.wire_api == jcode_base::config::NamedProviderApi::Responses {
+                jcode_provider_core::OPENAI_COMPATIBLE_RESPONSES_SELECTABLE_EFFORTS.to_vec()
+            } else {
+                jcode_provider_core::OPENAI_COMPATIBLE_SELECTABLE_EFFORTS.to_vec()
+            }
         } else if Self::profile_supports_unified_reasoning(
             self.profile_id.as_deref(),
             self.send_openrouter_headers,
@@ -745,6 +836,7 @@ impl Provider for OpenRouterProvider {
             )),
             reasoning_effort: Arc::new(RwLock::new(self.reasoning_effort())),
             api_base: self.api_base.clone(),
+            wire_api: self.wire_api,
             auth: self.auth.clone(),
             supports_provider_features: self.supports_provider_features,
             supports_model_catalog: self.supports_model_catalog,

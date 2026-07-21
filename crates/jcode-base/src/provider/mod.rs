@@ -1187,6 +1187,21 @@ impl MultiProvider {
         Ok(())
     }
 
+    fn set_model_on_openrouter_aggregator(&self, requested_model: &str) -> Result<()> {
+        self.ensure_provider_lock_allows_model_target(ActiveProvider::OpenRouter, requested_model)?;
+        let provider = external::instantiate_openrouter_runtime(
+            external::OpenRouterRuntimeSpec::OpenRouterApiKey,
+        )?;
+        provider.set_model(requested_model)?;
+        *self
+            .openrouter
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(provider);
+        self.clear_active_openai_compatible_profile();
+        self.set_active_provider(ActiveProvider::OpenRouter);
+        Ok(())
+    }
+
     fn should_replace_openrouter_after_auth_change(
         existing: &dyn Provider,
         candidate: &dyn Provider,
@@ -1838,6 +1853,9 @@ impl Provider for MultiProvider {
         if let Some((target, prefix, target_model)) =
             explicit_model_provider_prefix(requested_model)
         {
+            if target == ActiveProvider::OpenRouter {
+                return self.set_model_on_openrouter_aggregator(target_model);
+            }
             self.ensure_provider_lock_allows_model_target(target, requested_model)?;
             // The single canonical parser decides whether this prefix pins a
             // dual-auth credential (and which provider/mode). Bare `claude:` /
@@ -1898,10 +1916,10 @@ impl Provider for MultiProvider {
             && !provider_pin.trim().is_empty()
             && let Some(openrouter_model) = openrouter_catalog_model_id(base_model)
         {
-            return self.set_model_on_provider(
-                ActiveProvider::OpenRouter,
-                &format!("{}@{}", openrouter_model, provider_pin),
-            );
+            return self.set_model_on_openrouter_aggregator(&format!(
+                "{}@{}",
+                openrouter_model, provider_pin
+            ));
         }
 
         // Detect which provider this model belongs to when no explicit
@@ -1920,6 +1938,15 @@ impl Provider for MultiProvider {
     fn set_route_selection(&self, selection: &RouteSelection) -> Result<()> {
         if selection.model.trim().is_empty() {
             anyhow::bail!("Model cannot be empty");
+        }
+
+        // OpenRouter and direct OpenAI-compatible profiles share a public
+        // provider slot. Bind the real aggregator before clearing the active
+        // profile so a missing key cannot leave an Azure Responses runtime
+        // half-switched to Chat Completions. This also covers auto routes whose
+        // routed model spec has no explicit OpenRouter prefix or provider pin.
+        if matches!(selection.runtime_key, RuntimeKey::OpenRouter) {
+            return self.set_model_on_openrouter_aggregator(&selection.routed_model_spec());
         }
 
         // Routing-prefix policy lives once in RouteSelection::routed_model_spec

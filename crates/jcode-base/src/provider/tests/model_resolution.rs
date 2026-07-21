@@ -968,6 +968,7 @@ default_model = "vendor/my-model"
 
 [providers.my-gateway]
 type = "openai-compatible"
+api = "responses"
 base_url = "https://example.com/proxy/openai"
 auth = "none"
 default_model = "vendor/my-model"
@@ -1016,6 +1017,7 @@ input = ["image"]
             });
         assert_eq!(route.provider, "my-gateway");
         assert_eq!(route.api_method, "openai-compatible:my-gateway");
+        assert!(route.detail.starts_with("Responses API · "));
         assert!(route.available);
         assert!(
             !routes
@@ -1030,6 +1032,50 @@ input = ["image"]
             .expect("named profile model spec must be selectable");
         assert_eq!(provider.active_provider(), ActiveProvider::OpenRouter);
         assert_eq!(provider.model(), "vendor/my-model");
+
+        // A picker route for the public OpenRouter aggregator must not clear
+        // the active named profile before validating OpenRouter credentials.
+        // Otherwise the failed switch leaves this Responses runtime exposed as
+        // generic Chat Completions and sends OpenRouter model ids to its URL.
+        let error = provider
+            .set_route_selection(&crate::provider::RouteSelection {
+                model: "gpt-5.6-sol".to_string(),
+                runtime_key: crate::provider::RuntimeKey::OpenRouter,
+                api_method: "openrouter".to_string(),
+                provider_label: "OpenAI".to_string(),
+                detail: String::new(),
+            })
+            .expect_err("OpenRouter switch without credentials must fail");
+        assert!(error.to_string().contains("OPENROUTER_API_KEY"));
+        assert_eq!(provider.model(), "vendor/my-model");
+        assert_eq!(provider.display_name(), "my-gateway (Responses API)");
+        let route = provider
+            .active_openrouter_execution_provider()
+            .and_then(|runtime| runtime.direct_openai_compatible_route_parts())
+            .expect("failed OpenRouter switch must preserve named profile identity");
+        assert_eq!(route.1, "openai-compatible:my-gateway");
+        assert!(route.2.starts_with("Responses API · "));
+
+        crate::env::set_var("OPENROUTER_API_KEY", "test-openrouter-key");
+        provider
+            .set_route_selection(&crate::provider::RouteSelection {
+                model: "gpt-5.6-sol".to_string(),
+                runtime_key: crate::provider::RuntimeKey::OpenRouter,
+                api_method: "openrouter".to_string(),
+                provider_label: "OpenAI".to_string(),
+                detail: String::new(),
+            })
+            .expect("OpenRouter switch with credentials must replace named profile");
+        assert_eq!(provider.model(), "openai/gpt-5.6-sol");
+        assert_eq!(provider.display_name(), "OpenRouter");
+        let openrouter = provider
+            .openrouter_provider()
+            .expect("OpenRouter runtime must be installed");
+        assert!(openrouter.supports_provider_routing_features());
+        assert_eq!(
+            openrouter.explicit_provider_pin_for_current_model().as_deref(),
+            Some("OpenAI")
+        );
 
         // And the configured default_provider/default_model pair must bind the
         // profile directly (same bug class as issue #448).

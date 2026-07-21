@@ -107,9 +107,9 @@ fn route_supports_reasoning_effort(api_method: &str) -> bool {
 /// "anthropic"), a route api method ("claude-oauth", "openrouter",
 /// "openai-compatible:myprofile"), or a bare openai-compatible profile id
 /// ("myprofile"). Matching is case/format-insensitive via the shared provider
-/// label normalizer. Routes for the active model are always kept so the
-/// current selection never disappears from the picker, and a filter that
-/// matches nothing falls back to the unfiltered list instead of an empty
+/// label normalizer. The active model is kept only when no allowed route serves
+/// that model, so same-model routes cannot bypass the provider filter. A filter
+/// that matches nothing falls back to the unfiltered list instead of an empty
 /// picker.
 fn filter_routes_by_provider_allowlist(
     routes: Vec<crate::provider::ModelRoute>,
@@ -148,9 +148,14 @@ fn filter_routes_by_provider_allowlist(
         })
     };
 
+    let allowed_has_current = routes
+        .iter()
+        .any(|route| route.model == current_model && route_matches(route));
     let filtered: Vec<crate::provider::ModelRoute> = routes
         .iter()
-        .filter(|route| route.model == current_model || route_matches(route))
+        .filter(|route| {
+            route_matches(route) || (route.model == current_model && !allowed_has_current)
+        })
         .cloned()
         .collect();
     if filtered.is_empty() {
@@ -1390,7 +1395,13 @@ impl App {
             let mut model_efforts = Vec::new();
             for route in entry_routes {
                 let efforts = if route_supports_reasoning_effort(&route.api_method) {
-                    inferred_reasoning_efforts(Some(&route.api_method), Some(name))
+                    let provider_identity =
+                        if route.detail.to_ascii_lowercase().contains("responses api") {
+                            format!("{} responses api", route.api_method)
+                        } else {
+                            route.api_method.clone()
+                        };
+                    inferred_reasoning_efforts(Some(&provider_identity), Some(name))
                 } else {
                     Vec::new()
                 };
@@ -3938,6 +3949,22 @@ mod tests {
             "unrelated-current",
         );
         assert_eq!(filtered.len(), routes.len());
+
+        // If an allowed provider already serves the current model, do not keep
+        // same-model routes from other providers. Those routes look identical
+        // in the picker and can silently move a compatible deployment onto an
+        // unrelated OAuth/OpenRouter credential path.
+        let same_model_routes = vec![
+            model_route("gpt-5.5", "OpenAI", "openai-oauth"),
+            model_route("gpt-5.5", "azure-credit", "openai-compatible:azure-credit"),
+        ];
+        let filtered = filter_routes_by_provider_allowlist(
+            same_model_routes,
+            Some(&["azure-credit".to_string()]),
+            "gpt-5.5",
+        );
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].provider, "azure-credit");
 
         // None / empty / blank-entry allowlists are no-ops.
         assert_eq!(
