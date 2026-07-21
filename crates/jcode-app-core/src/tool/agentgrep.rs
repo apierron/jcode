@@ -261,6 +261,14 @@ fn run_agentgrep_blocking(params: &AgentGrepInput, ctx: &ToolContext) -> Result<
             );
         }
     }
+    if params.file.as_deref().is_none_or(str::is_empty)
+        && params.path.as_deref().is_none_or(str::is_empty)
+        && ctx.working_dir.as_deref() == dirs::home_dir().as_deref()
+    {
+        anyhow::bail!(
+            "agentgrep refuses an unscoped search from the home directory; set 'path' or 'file' to the project or file to search"
+        );
+    }
     let context_path = maybe_write_context_json(params, ctx)?;
     let request = summarize_agentgrep_request(params, ctx, context_path.as_deref());
     let started_at = std::time::Instant::now();

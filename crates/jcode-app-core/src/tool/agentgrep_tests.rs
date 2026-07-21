@@ -56,6 +56,15 @@ fn agentgrep_rejects_missing_session_cwd_instead_of_using_process_cwd() {
 }
 
 #[test]
+fn agentgrep_rejects_unscoped_home_directory_search() {
+    let home = dirs::home_dir().expect("home directory");
+    let error = run_agentgrep_blocking(&grep_input("needle", None), &test_ctx(&home))
+        .expect_err("unscoped home search must fail before walking files");
+
+    assert!(error.to_string().contains("unscoped search"));
+}
+
+#[test]
 fn render_compacts_huge_grep_match_lines() {
     let args = GrepArgs {
         query: "set_status_notice".to_string(),
