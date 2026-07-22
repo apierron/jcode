@@ -1,7 +1,7 @@
 use crossterm::event::{
     Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
-use futures::StreamExt;
+use futures::{Stream, StreamExt};
 use std::{collections::VecDeque, io, time::Duration};
 use tokio::sync::mpsc;
 
@@ -20,13 +20,19 @@ pub(super) struct EventStream {
 
 impl EventStream {
     pub(super) fn new() -> Self {
+        Self::from_stream(crossterm::event::EventStream::new())
+    }
+
+    fn from_stream<S>(mut source: S) -> Self
+    where
+        S: Stream<Item = io::Result<Event>> + Send + Unpin + 'static,
+    {
         let (tx, rx) = mpsc::channel(TERMINAL_EVENT_QUEUE_CAPACITY);
         tokio::spawn(async move {
-            let mut inner = crossterm::event::EventStream::new();
             loop {
                 tokio::select! {
                     _ = tx.closed() => break,
-                    event = inner.next() => {
+                    event = source.next() => {
                         let Some(event) = event else { break };
                         if tx.send(event).await.is_err() {
                             break;
@@ -286,6 +292,10 @@ fn parse_sgr_mouse_tail(tail: &str) -> Option<MouseEvent> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
 
     #[test]
     fn parses_fragmented_scroll_report() {
@@ -411,5 +421,80 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(received, expected);
+    }
+
+    #[tokio::test]
+    async fn bounded_reader_applies_lossless_backpressure_in_fifo_order() {
+        let total = TERMINAL_EVENT_QUEUE_CAPACITY + 32;
+        let source = futures::stream::iter((0..total).map(|idx| {
+            Ok(Event::Key(KeyEvent::new(
+                KeyCode::Char(char::from(b'a' + (idx % 26) as u8)),
+                KeyModifiers::NONE,
+            )))
+        }));
+        let mut stream = EventStream::from_stream(source);
+        tokio::task::yield_now().await;
+
+        let mut received = Vec::with_capacity(total);
+        for _ in 0..total {
+            let event = tokio::time::timeout(Duration::from_secs(1), stream.next())
+                .await
+                .expect("bounded reader stalled")
+                .expect("source ended early")
+                .expect("unexpected input error");
+            let Event::Key(key) = event else {
+                panic!("expected key event");
+            };
+            received.push(key.code);
+        }
+
+        let expected: Vec<_> = (0..total)
+            .map(|idx| KeyCode::Char(char::from(b'a' + (idx % 26) as u8)))
+            .collect();
+        assert_eq!(received, expected);
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), stream.next())
+                .await
+                .expect("EOF did not propagate")
+                .is_none()
+        );
+    }
+
+    struct DropObservedStream {
+        dropped: Arc<AtomicBool>,
+    }
+
+    impl Stream for DropObservedStream {
+        type Item = io::Result<Event>;
+
+        fn poll_next(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Self::Item>> {
+            std::task::Poll::Pending
+        }
+    }
+
+    impl Drop for DropObservedStream {
+        fn drop(&mut self) {
+            self.dropped.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[tokio::test]
+    async fn reader_task_stops_when_event_stream_is_dropped() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let stream = EventStream::from_stream(DropObservedStream {
+            dropped: dropped.clone(),
+        });
+        drop(stream);
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !dropped.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("reader task outlived the receiver");
     }
 }
