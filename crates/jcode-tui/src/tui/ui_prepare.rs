@@ -696,7 +696,7 @@ pub(super) fn prepare_messages(
             }
         };
         let mut cache = cache;
-        if let Some((prepared, kind)) = cache.get_exact_with_kind(&key) {
+        if let Some((prepared, kind, prepared_bytes)) = cache.get_exact_with_kind(&key) {
             // A completed deferred mermaid render does not bump
             // `messages_version`/`streaming_text_hash`, so an exact hit can
             // still bake in a stale "rendering..." placeholder. Fall through
@@ -706,7 +706,7 @@ pub(super) fn prepare_messages(
                 .is_some_and(|stamp| crate::tui::mermaid::deferred_render_epoch() != stamp);
             if !stale {
                 super::note_full_prep_cache_lookup(cache_lookup_start.elapsed());
-                super::note_full_prep_cache_hit(kind, prepared.as_ref());
+                super::note_full_prep_cache_hit(kind, prepared.as_ref(), prepared_bytes);
                 return prepared;
             }
         }
@@ -1037,7 +1037,7 @@ fn prepare_body_cached(app: &dyn TuiState, width: u16) -> Arc<PreparedMessages> 
     };
 
     let mut cache = cache;
-    if let Some((prepared, kind)) = cache.get_exact_with_kind(&key) {
+    if let Some((prepared, kind, prepared_bytes)) = cache.get_exact_with_kind(&key) {
         // A deferred mermaid render completing does not bump
         // `messages_version`, so an exact hit can still be stale: it bakes in
         // a "rendering..." placeholder whose background render has since
@@ -1048,7 +1048,7 @@ fn prepare_body_cached(app: &dyn TuiState, width: u16) -> Arc<PreparedMessages> 
             .is_some_and(|stamp| crate::tui::mermaid::deferred_render_epoch() != stamp);
         if !stale {
             super::note_body_cache_lookup(cache_lookup_start.elapsed());
-            super::note_body_cache_hit(kind, prepared.as_ref());
+            super::note_body_cache_hit(kind, prepared.as_ref(), prepared_bytes);
             return prepared;
         }
     }

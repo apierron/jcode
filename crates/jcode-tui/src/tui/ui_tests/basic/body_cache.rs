@@ -650,10 +650,12 @@ fn test_full_prep_cache_state_accepts_large_single_entry_within_total_budget() {
     let mut cache = FullPrepCacheState::default();
     cache.insert(key.clone(), prepared.clone());
 
-    let hit = cache
-        .get_exact(&key)
+    let (hit, kind, prepared_bytes) = cache
+        .get_exact_with_kind(&key)
         .expect("expected large full prep cache entry to be retained");
     assert!(Arc::ptr_eq(&hit, &prepared));
+    assert_eq!(kind, CacheEntryKind::Regular);
+    assert_eq!(prepared_bytes, estimate_prepared_chat_frame_bytes(&prepared));
 }
 
 #[test]
