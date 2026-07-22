@@ -1190,20 +1190,11 @@ pub(super) fn gather_memory_info(
     } else {
         None
     };
-    let sidecar_model = if memory_enabled && crate::memory::memory_sidecar_enabled() {
-        let sidecar = crate::sidecar::Sidecar::new();
-        Some(format!(
-            "{} · {}",
-            sidecar.backend_name(),
-            sidecar.model_name()
-        ))
-    } else {
-        None
-    };
-
     let finalize = |mut info: MemoryInfo| {
         info.activity = activity.clone();
-        info.sidecar_model = sidecar_model.clone();
+        if !memory_enabled {
+            info.sidecar_model = None;
+        }
         info.disabled = !memory_enabled;
         info
     };
@@ -1213,12 +1204,12 @@ pub(super) fn gather_memory_info(
             if ts.elapsed() < TTL || *refreshing {
                 return match cached.clone() {
                     Some(info) => Some(finalize(info)),
-                    None => fallback_memory_info(memory_enabled, &activity, &sidecar_model),
+                    None => fallback_memory_info(memory_enabled, &activity),
                 };
             }
             let stale = match cached.clone() {
                 Some(info) => Some(finalize(info)),
-                None => fallback_memory_info(memory_enabled, &activity, &sidecar_model),
+                None => fallback_memory_info(memory_enabled, &activity),
             };
             *refreshing = true;
             let working_dir = working_dir.clone();
@@ -1240,21 +1231,19 @@ pub(super) fn gather_memory_info(
         });
     }
 
-    fallback_memory_info(memory_enabled, &activity, &sidecar_model)
+    fallback_memory_info(memory_enabled, &activity)
 }
 
 fn fallback_memory_info(
     memory_enabled: bool,
     activity: &Option<crate::memory_types::MemoryActivity>,
-    sidecar_model: &Option<String>,
 ) -> Option<MemoryInfo> {
     // No cached counts yet. Show whatever live signal we have.
-    if activity.is_none() && sidecar_model.is_none() && memory_enabled {
+    if activity.is_none() && memory_enabled {
         return None;
     }
     Some(MemoryInfo {
         sidecar_available: crate::memory::memory_sidecar_enabled(),
-        sidecar_model: sidecar_model.clone(),
         activity: activity.clone(),
         disabled: !memory_enabled,
         ..Default::default()
@@ -1330,6 +1319,17 @@ fn gather_memory_info_inner(working_dir: Option<String>) -> Option<MemoryInfo> {
     } else {
         None
     }
+}
+
+#[cfg(test)]
+#[test]
+fn memory_widget_resolves_sidecar_off_the_render_path() {
+    let source = include_str!("helpers.rs");
+    let render_path = source
+        .split_once("fn gather_memory_info_inner")
+        .expect("missing background memory refresh")
+        .0;
+    assert!(!render_path.contains("Sidecar::new()"));
 }
 
 pub(super) fn gather_ambient_info(ambient_enabled: bool) -> Option<AmbientWidgetData> {
