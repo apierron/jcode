@@ -7,6 +7,7 @@ use std::io::Write;
 
 const STATUS_SPINNER_FPS: f32 = 12.5;
 pub(super) const STATUS_SPINNER_ONLY_INTERVAL: Duration = Duration::from_millis(80);
+const MAX_COALESCED_TERMINAL_EVENTS: usize = 32;
 
 pub(super) fn redraw_timer(period: Duration) -> tokio::time::Interval {
     let mut interval = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
@@ -395,6 +396,19 @@ impl App {
                     event = event_stream.next() => {
                         if event.is_some() {
                             needs_redraw |= local::handle_terminal_event(&mut self, &mut terminal, event)?;
+                            // Coalesce an already-buffered input burst before drawing. This keeps
+                            // the async EventStream as the sole crossterm reader while avoiding a
+                            // full terminal repaint for every wheel packet or typed character.
+                            let ready_events = event_stream
+                                .drain_ready::<{ MAX_COALESCED_TERMINAL_EVENTS - 1 }>()
+                                .into_iter();
+                            for event in ready_events.flatten() {
+                                needs_redraw |= local::handle_terminal_event(
+                                    &mut self,
+                                    &mut terminal,
+                                    Some(event),
+                                )?;
+                            }
                         } else if super::terminal_liveness::terminal_abandoned() {
                             // Input EOF and the controlling terminal is gone:
                             // this client is an orphan (window died without a
@@ -609,6 +623,18 @@ impl App {
                     event = event_stream.next() => {
                         if event.is_some() {
                             needs_redraw |= remote::handle_terminal_event(&mut self, &mut terminal, &mut remote_conn, event).await?;
+                            let ready_events = event_stream
+                                .drain_ready::<{ MAX_COALESCED_TERMINAL_EVENTS - 1 }>()
+                                .into_iter();
+                            for event in ready_events.flatten() {
+                                needs_redraw |= remote::handle_terminal_event(
+                                    &mut self,
+                                    &mut terminal,
+                                    &mut remote_conn,
+                                    Some(event),
+                                )
+                                .await?;
+                            }
                         } else if super::terminal_liveness::terminal_abandoned() {
                             // Input EOF with the controlling terminal gone:
                             // orphaned client (see local loop). Exit; the
